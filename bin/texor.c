@@ -15,7 +15,7 @@
 #define SCREEN_HEIGHT 768
 
 #define MAX_N_ENEMIES 256
-#define MAX_WORD_LEN 32
+#define MAX_WORD_LEN 33
 
 typedef struct Player {
     Transform transform;
@@ -46,9 +46,7 @@ static World WORLD;
 static void init_world(World *world);
 static void update_world(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
-static void draw_text(
-    Font font, const char *text, Vector2 position, float font_size, Color *colors
-);
+static void draw_text(Font font, const char *text, Vector2 position, Color *colors);
 
 typedef struct Word {
     Font font;
@@ -108,6 +106,7 @@ int main(void) {
 
         BeginDrawing();
         {
+            // scene
             BeginMode3D(WORLD.camera);
             {
                 ClearBackground(BLANK);
@@ -126,13 +125,27 @@ int main(void) {
             }
             EndMode3D();
 
+            // enemy words
             for (int i = 0; i < WORLD.n_enemies; ++i) {
                 Word word = enemy_words[i];
                 DrawRectangleRounded(word.rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(
-                    font, word.chars, word.text_pos, word.font.baseSize, word.char_colors
-                );
+                draw_text(font, word.chars, word.text_pos, word.char_colors);
             }
+
+            // text input
+            static char prompt[3] = {'>', ' ', '\0'};
+            Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
+            Vector2 text_size = MeasureTextEx(font, WORLD.text_input, font.baseSize, 0);
+            float y = GetScreenHeight() - font.baseSize - 5;
+            DrawRectangle(
+                5.0 + prompt_size.x + text_size.x,
+                GetScreenHeight() - font.baseSize - 5,
+                2,
+                font.baseSize,
+                WHITE
+            );
+            draw_text(font, prompt, (Vector2){5.0, y}, 0);
+            draw_text(font, WORLD.text_input, (Vector2){prompt_size.x, y}, 0);
         }
         EndDrawing();
     }
@@ -177,7 +190,7 @@ static void update_world(World *world) {
     update_free_orbit_camera(&world->camera);
 
     // -------------------------------------------------------------------
-    // player
+    // keyboard input
     Vector2 dir = Vector2Zero();
     dir.y += IsKeyDown(KEY_UP);
     dir.y -= IsKeyDown(KEY_DOWN);
@@ -187,9 +200,10 @@ static void update_world(World *world) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * dt);
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
-    } else if (IsKeyPressedRepeat(KEY_BACKSPACE) && text_input_len > 0) {
+    } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && text_input_len > 0) {
         WORLD.text_input[--text_input_len] = '\0';
-    } else if (text_input_len < MAX_WORD_LEN && pressed_char <= 127) {
+    } else if (IsKeyPressed(KEY_ENTER)) {
+    } else if (text_input_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         WORLD.text_input[text_input_len++] = pressed_char;
         WORLD.text_input[text_input_len + 1] = '\0';
     }
@@ -267,12 +281,10 @@ static void update_free_orbit_camera(Camera3D *camera) {
     CameraMoveToTarget(camera, -mouse_wheel_move * zoom_speed);
 }
 
-static void draw_text(
-    Font font, const char *text, Vector2 position, float font_size, Color *colors
-) {
+static void draw_text(Font font, const char *text, Vector2 position, Color *colors) {
     int n_chars = strlen(text);
     float offset = 0.0f;
-    float scale = font_size / font.baseSize;
+    float scale = (float)font.baseSize / font.baseSize;
 
     for (int i = 0; i < n_chars; i++) {
         int ch = text[i];
@@ -283,7 +295,7 @@ static void draw_text(
 
         if (ch != ' ') {
             DrawTextCodepoint(
-                font, ch, (Vector2){position.x + offset, position.y}, font_size, color
+                font, ch, (Vector2){position.x + offset, position.y}, font.baseSize, color
             );
         }
 
