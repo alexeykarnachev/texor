@@ -1,3 +1,4 @@
+#include "../src/shader.h"
 #include "raylib.h"
 #include "raymath.h"
 #include "rcamera.h"
@@ -6,12 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define print_vec(v) (printf("%f, %f, %f\n", v.x, v.y, v.z))
+#define print_vec3(v) (printf("%f, %f, %f\n", v.x, v.y, v.z))
+#define print_vec2(v) (printf("%f, %f\n", v.x, v.y))
 
 #define SCREEN_WIDTH 1024
 #define SCREEN_HEIGHT 768
 
 #define MAX_N_ENEMIES 256
+#define MAX_WORD_LENGTH 32
 
 typedef struct Player {
     Transform transform;
@@ -20,6 +23,7 @@ typedef struct Player {
 typedef struct Enemy {
     Transform transform;
     float speed;
+    char name[MAX_WORD_LENGTH];
 } Enemy;
 
 typedef struct World {
@@ -39,31 +43,90 @@ static World WORLD;
 static void init_world(World *world);
 static void update_world(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
+static void draw_text(
+    Font font, const char *text, Vector2 position, float font_size, Color *colors
+);
+
+typedef struct Word {
+    Font font;
+    Rectangle rec;
+    Vector2 text_pos;
+    char chars[MAX_WORD_LENGTH];
+    Color char_colors[MAX_WORD_LENGTH];
+} Word;
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "texor");
     SetTargetFPS(60);
 
+    int font_size = 30;
+    Font font = LoadFontEx(
+        "./resources/fonts/ShareTechMono-Regular.ttf", font_size, 0, 0
+    );
+    SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
+
     init_world(&WORLD);
 
     while (!WindowShouldClose()) {
         update_world(&WORLD);
 
-        BeginDrawing();
-
-        BeginMode3D(WORLD.camera);
-        ClearBackground(BLANK);
-        DrawSphere(WORLD.player.transform.translation, 1.0, RAYWHITE);
+        static Word enemy_words[MAX_N_ENEMIES];
         for (int i = 0; i < WORLD.n_enemies; ++i) {
             Enemy enemy = WORLD.enemies[i];
-            DrawSphere(enemy.transform.translation, 1.0, RED);
-        }
-        DrawCircle3D(
-            Vector3Zero(), WORLD.spawn_radius, (Vector3){0.0, 0.0, 1.0}, 0.0, WHITE
-        );
-        EndMode3D();
+            Vector2 screen_pos = GetWorldToScreen(
+                enemy.transform.translation, WORLD.camera
+            );
+            Vector2 text_size = MeasureTextEx(font, enemy.name, font_size, 0);
 
+            Vector2 rec_size = Vector2Scale(text_size, 1.2);
+            Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
+            Vector2 rec_pos = Vector2Subtract(rec_center, Vector2Scale(rec_size, 0.5));
+
+            Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
+            Vector2 text_pos = {
+                rec_center.x - 0.5 * text_size.x, rec_center.y - 0.5 * font_size};
+
+            Word word = {0};
+            word.font = font;
+            word.rec = rec;
+            word.text_pos = text_pos;
+            strcpy(word.chars, enemy.name);
+            for (int i = 0; i < strlen(word.chars); ++i) {
+                word.char_colors[i] = RED;
+            }
+
+            enemy_words[i] = word;
+        }
+
+        BeginDrawing();
+        {
+            BeginMode3D(WORLD.camera);
+            {
+                ClearBackground(BLANK);
+                DrawSphere(WORLD.player.transform.translation, 1.0, RAYWHITE);
+                for (int i = 0; i < WORLD.n_enemies; ++i) {
+                    Enemy enemy = WORLD.enemies[i];
+                    DrawSphere(enemy.transform.translation, 1.0, RED);
+                }
+                DrawCircle3D(
+                    Vector3Zero(),
+                    WORLD.spawn_radius,
+                    (Vector3){0.0, 0.0, 1.0},
+                    0.0,
+                    WHITE
+                );
+            }
+            EndMode3D();
+
+            for (int i = 0; i < WORLD.n_enemies; ++i) {
+                Word word = enemy_words[i];
+                DrawRectangleRounded(word.rec, 0.3, 16, (Color){20, 20, 20, 255});
+                draw_text(
+                    font, word.chars, word.text_pos, word.font.baseSize, word.char_colors
+                );
+            }
+        }
         EndDrawing();
     }
 }
@@ -72,13 +135,13 @@ static void init_world(World *world) {
     memset(world, 0, sizeof(World));
 
     // -------------------------------------------------------------------
-    // Player
+    // player
     world->player.transform.rotation = QuaternionIdentity();
     world->player.transform.scale = Vector3One();
     world->player.transform.translation = Vector3Zero();
 
     // -------------------------------------------------------------------
-    // Camera
+    // camera
     Vector3 player_position = world->player.transform.translation;
     world->camera.fovy = 60.0;
     world->camera.position = player_position;
@@ -88,7 +151,7 @@ static void init_world(World *world) {
     world->camera.projection = CAMERA_PERSPECTIVE;
 
     // -------------------------------------------------------------------
-    // Game
+    // game
     world->spawn_radius = 28.0;
 }
 
@@ -100,16 +163,16 @@ static void update_world(World *world) {
     Player *player = &world->player;
 
     // -------------------------------------------------------------------
-    // Camera
+    // camera
     update_free_orbit_camera(&world->camera);
 
     // -------------------------------------------------------------------
-    // Player
+    // player
     Vector2 dir = Vector2Zero();
-    dir.y += IsKeyDown(KEY_W);
-    dir.y -= IsKeyDown(KEY_S);
-    dir.x -= IsKeyDown(KEY_A);
-    dir.x += IsKeyDown(KEY_D);
+    dir.y += IsKeyDown(KEY_UP);
+    dir.y -= IsKeyDown(KEY_DOWN);
+    dir.x -= IsKeyDown(KEY_LEFT);
+    dir.x += IsKeyDown(KEY_RIGHT);
     if (Vector2Length(dir) > EPSILON) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * dt);
         player->transform.translation.x += step.x;
@@ -117,13 +180,12 @@ static void update_world(World *world) {
     }
 
     // -------------------------------------------------------------------
-    // Enemies
-
-    // Spawn
+    // enemies spawn
     if (world->spawn_countdown < 0.0 && world->n_enemies < MAX_N_ENEMIES) {
-        world->spawn_countdown = fmaxf(5.0 * expf(world->time * 0.001), 1.0);
+        world->spawn_countdown = fmaxf(0.1 * expf(world->time * 0.001), 1.0);
 
         float angle = ((float)rand() / RAND_MAX) * 2 * PI;
+
         Enemy enemy = {
             .transform={
                 .translation = {
@@ -134,19 +196,27 @@ static void update_world(World *world) {
                 .rotation = QuaternionIdentity(),
                 .scale = Vector3One(),
             },
-            .speed=5.0
+            .speed = 5.0
         };
+        strcpy(enemy.name, TextFormat("enemy_%d", world->n_enemies));
         world->enemies[world->n_enemies++] = enemy;
     }
 
-    // Move towards player
+    // -------------------------------------------------------------------
+    // enemies action
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
-        Vector3 dir = Vector3Normalize(
-            Vector3Subtract(player->transform.translation, enemy->transform.translation)
+        Vector3 vec = Vector3Subtract(
+            player->transform.translation, enemy->transform.translation
         );
-        Vector3 step = Vector3Scale(dir, enemy->speed * dt);
-        enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
+        if (Vector3Length(vec) > 2.0) {
+            // move towards the player
+            Vector3 dir = Vector3Normalize(vec);
+            Vector3 step = Vector3Scale(dir, enemy->speed * dt);
+            enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
+        } else {
+            // attack the player
+        }
     }
 }
 
@@ -180,4 +250,30 @@ static void update_free_orbit_camera(Camera3D *camera) {
 
     // Bring camera closer (or move away), to the look-at point
     CameraMoveToTarget(camera, -mouse_wheel_move * zoom_speed);
+}
+
+static void draw_text(
+    Font font, const char *text, Vector2 position, float font_size, Color *colors
+) {
+    int n_chars = strlen(text);
+    float offset = 0.0f;
+    float scale = font_size / font.baseSize;
+
+    for (int i = 0; i < n_chars; i++) {
+        int ch = text[i];
+        int index = GetGlyphIndex(font, ch);
+        Color color = colors[i];
+
+        if (ch != ' ') {
+            DrawTextCodepoint(
+                font, ch, (Vector2){position.x + offset, position.y}, font_size, color
+            );
+        }
+
+        if (font.glyphs[index].advanceX == 0) {
+            offset += ((float)font.recs[index].width * scale);
+        } else {
+            offset += ((float)font.glyphs[index].advanceX * scale);
+        }
+    }
 }
