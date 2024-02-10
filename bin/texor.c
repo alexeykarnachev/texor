@@ -17,6 +17,14 @@
 #define MAX_N_ENEMIES 256
 #define MAX_WORD_LEN 33
 
+typedef struct Word {
+    Font font;
+    Rectangle rec;
+    Vector2 text_pos;
+    char chars[MAX_WORD_LEN];
+    Color char_colors[MAX_WORD_LEN];
+} Word;
+
 typedef struct Player {
     Transform transform;
 } Player;
@@ -24,7 +32,7 @@ typedef struct Player {
 typedef struct Enemy {
     Transform transform;
     float speed;
-    char name[MAX_WORD_LEN];
+    Word word;
 } Enemy;
 
 typedef struct World {
@@ -39,6 +47,9 @@ typedef struct World {
     float spawn_countdown;
     float spawn_radius;
     Camera3D camera;
+
+    Font enemy_word_font;
+    Font prompt_font;
 } World;
 
 static World WORLD;
@@ -46,113 +57,32 @@ static World WORLD;
 static void init_world(World *world);
 static void update_world(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
+static void draw_world(World *world);
 static void draw_text(Font font, const char *text, Vector2 position, Color *colors);
-
-typedef struct Word {
-    Font font;
-    Rectangle rec;
-    Vector2 text_pos;
-    char chars[MAX_WORD_LEN];
-    Color char_colors[MAX_WORD_LEN];
-} Word;
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "texor");
     SetTargetFPS(60);
 
-    int font_size = 30;
-    Font font = LoadFontEx(
-        "./resources/fonts/ShareTechMono-Regular.ttf", font_size, 0, 0
-    );
-    SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
-
     init_world(&WORLD);
 
     while (!WindowShouldClose()) {
         update_world(&WORLD);
-
-        static Word enemy_words[MAX_N_ENEMIES];
-        for (int i = 0; i < WORLD.n_enemies; ++i) {
-            Enemy enemy = WORLD.enemies[i];
-            Vector2 screen_pos = GetWorldToScreen(
-                enemy.transform.translation, WORLD.camera
-            );
-            Vector2 text_size = MeasureTextEx(font, enemy.name, font_size, 0);
-
-            Vector2 rec_size = Vector2Scale(text_size, 1.2);
-            Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
-            Vector2 rec_pos = Vector2Subtract(rec_center, Vector2Scale(rec_size, 0.5));
-
-            Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
-            Vector2 text_pos = {
-                rec_center.x - 0.5 * text_size.x, rec_center.y - 0.5 * font_size};
-
-            Word word = {0};
-            word.font = font;
-            word.rec = rec;
-            word.text_pos = text_pos;
-            strcpy(word.chars, enemy.name);
-            bool is_combo = true;
-            for (int i = 0; i < strlen(word.chars); ++i) {
-                char name_c = word.chars[i];
-                char text_input_c = WORLD.text_input[i];
-                is_combo = text_input_c != '\0' && is_combo && name_c == text_input_c;
-                word.char_colors[i] = is_combo ? GREEN : WHITE;
-            }
-
-            enemy_words[i] = word;
-        }
-
-        BeginDrawing();
-        {
-            // scene
-            BeginMode3D(WORLD.camera);
-            {
-                ClearBackground(BLANK);
-                DrawSphere(WORLD.player.transform.translation, 1.0, RAYWHITE);
-                for (int i = 0; i < WORLD.n_enemies; ++i) {
-                    Enemy enemy = WORLD.enemies[i];
-                    DrawSphere(enemy.transform.translation, 1.0, RED);
-                }
-                DrawCircle3D(
-                    Vector3Zero(),
-                    WORLD.spawn_radius,
-                    (Vector3){0.0, 0.0, 1.0},
-                    0.0,
-                    WHITE
-                );
-            }
-            EndMode3D();
-
-            // enemy words
-            for (int i = 0; i < WORLD.n_enemies; ++i) {
-                Word word = enemy_words[i];
-                DrawRectangleRounded(word.rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(font, word.chars, word.text_pos, word.char_colors);
-            }
-
-            // text input
-            static char prompt[3] = {'>', ' ', '\0'};
-            Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
-            Vector2 text_size = MeasureTextEx(font, WORLD.text_input, font.baseSize, 0);
-            float y = GetScreenHeight() - font.baseSize - 5;
-            DrawRectangle(
-                5.0 + prompt_size.x + text_size.x,
-                GetScreenHeight() - font.baseSize - 5,
-                2,
-                font.baseSize,
-                WHITE
-            );
-            draw_text(font, prompt, (Vector2){5.0, y}, 0);
-            draw_text(font, WORLD.text_input, (Vector2){prompt_size.x, y}, 0);
-        }
-        EndDrawing();
+        draw_world(&WORLD);
     }
 }
 
 static void init_world(World *world) {
     memset(world, 0, sizeof(World));
+
+    // -------------------------------------------------------------------
+    // fonts
+    const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
+    world->enemy_word_font = LoadFontEx(font_file_path, 30, 0, 0);
+    SetTextureFilter(world->enemy_word_font.texture, TEXTURE_FILTER_BILINEAR);
+
+    world->prompt_font = world->enemy_word_font;
 
     // -------------------------------------------------------------------
     // player
@@ -190,6 +120,38 @@ static void update_world(World *world) {
     update_free_orbit_camera(&world->camera);
 
     // -------------------------------------------------------------------
+    // enemy words
+    for (int i = 0; i < world->n_enemies; ++i) {
+        Enemy *enemy = &world->enemies[i];
+        Word *word = &enemy->word;
+
+        Vector2 screen_pos = GetWorldToScreen(
+            enemy->transform.translation, world->camera
+        );
+        Vector2 text_size = MeasureTextEx(
+            word->font, word->chars, word->font.baseSize, 0
+        );
+
+        Vector2 rec_size = Vector2Scale(text_size, 1.2);
+        Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
+        Vector2 rec_pos = Vector2Subtract(rec_center, Vector2Scale(rec_size, 0.5));
+
+        Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
+        Vector2 text_pos = {
+            rec_center.x - 0.5 * text_size.x, rec_center.y - 0.5 * word->font.baseSize};
+
+        word->rec = rec;
+        word->text_pos = text_pos;
+        bool is_combo = true;
+        for (int i = 0; i < strlen(word->chars); ++i) {
+            char name_c = word->chars[i];
+            char text_input_c = world->text_input[i];
+            is_combo = text_input_c != '\0' && is_combo && name_c == text_input_c;
+            word->char_colors[i] = is_combo ? GREEN : WHITE;
+        }
+    }
+
+    // -------------------------------------------------------------------
     // keyboard input
     Vector2 dir = Vector2Zero();
     dir.y += IsKeyDown(KEY_UP);
@@ -225,9 +187,10 @@ static void update_world(World *world) {
                 .rotation = QuaternionIdentity(),
                 .scale = Vector3One(),
             },
-            .speed = 5.0
+            .speed = 5.0,
         };
-        strcpy(enemy.name, TextFormat("enemy_%d", world->n_enemies));
+        enemy.word.font = world->enemy_word_font;
+        strcpy(enemy.word.chars, TextFormat("enemy_%d", world->n_enemies));
         world->enemies[world->n_enemies++] = enemy;
     }
 
@@ -279,6 +242,50 @@ static void update_free_orbit_camera(Camera3D *camera) {
 
     // Bring camera closer (or move away), to the look-at point
     CameraMoveToTarget(camera, -mouse_wheel_move * zoom_speed);
+}
+
+static void draw_world(World *world) {
+    BeginDrawing();
+    {
+        // scene
+        BeginMode3D(world->camera);
+        {
+            ClearBackground(BLANK);
+            DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
+            for (int i = 0; i < world->n_enemies; ++i) {
+                Enemy enemy = world->enemies[i];
+                DrawSphere(enemy.transform.translation, 1.0, RED);
+            }
+            DrawCircle3D(
+                Vector3Zero(), world->spawn_radius, (Vector3){0.0, 0.0, 1.0}, 0.0, WHITE
+            );
+        }
+        EndMode3D();
+
+        // enemy words
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Word word = world->enemies[i].word;
+            DrawRectangleRounded(word.rec, 0.3, 16, (Color){20, 20, 20, 255});
+            draw_text(word.font, word.chars, word.text_pos, word.char_colors);
+        }
+
+        // text input
+        static char prompt[3] = {'>', ' ', '\0'};
+        Font font = world->prompt_font;
+        Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
+        Vector2 text_size = MeasureTextEx(font, world->text_input, font.baseSize, 0);
+        float y = GetScreenHeight() - font.baseSize - 5;
+        DrawRectangle(
+            5.0 + prompt_size.x + text_size.x,
+            GetScreenHeight() - font.baseSize - 5,
+            2,
+            font.baseSize,
+            WHITE
+        );
+        draw_text(font, prompt, (Vector2){5.0, y}, 0);
+        draw_text(font, world->text_input, (Vector2){prompt_size.x, y}, 0);
+    }
+    EndDrawing();
 }
 
 static void draw_text(Font font, const char *text, Vector2 position, Color *colors) {
