@@ -16,6 +16,7 @@
 
 #define MAX_N_ENEMIES 256
 #define MAX_WORD_LEN 33
+#define MAX_N_ENEMY_NAMES 1000
 
 typedef struct Word {
     Font font;
@@ -50,6 +51,9 @@ typedef struct World {
 
     Font enemy_word_font;
     Font prompt_font;
+
+    int n_enemy_names;
+    char enemy_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 } World;
 
 static World WORLD;
@@ -77,7 +81,17 @@ static void init_world(World *world) {
     memset(world, 0, sizeof(World));
 
     // -------------------------------------------------------------------
-    // fonts
+    // init names
+    FILE *f = fopen("./resources/words/enemies.txt", "r");
+    while (fgets(world->enemy_names[world->n_enemy_names], MAX_WORD_LEN, f)) {
+        char *name = world->enemy_names[world->n_enemy_names];
+        name[strcspn(name, "\n")] = 0;
+        world->n_enemy_names += 1;
+    }
+    fclose(f);
+
+    // -------------------------------------------------------------------
+    // init fonts
     const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
     world->enemy_word_font = LoadFontEx(font_file_path, 30, 0, 0);
     SetTextureFilter(world->enemy_word_font.texture, TEXTURE_FILTER_BILINEAR);
@@ -85,13 +99,13 @@ static void init_world(World *world) {
     world->prompt_font = world->enemy_word_font;
 
     // -------------------------------------------------------------------
-    // player
+    // init player
     world->player.transform.rotation = QuaternionIdentity();
     world->player.transform.scale = Vector3One();
     world->player.transform.translation = Vector3Zero();
 
     // -------------------------------------------------------------------
-    // camera
+    // init camera
     Vector3 player_position = world->player.transform.translation;
     world->camera.fovy = 60.0;
     world->camera.position = player_position;
@@ -101,7 +115,7 @@ static void init_world(World *world) {
     world->camera.projection = CAMERA_PERSPECTIVE;
 
     // -------------------------------------------------------------------
-    // game
+    // init game parameters
     world->spawn_radius = 28.0;
 }
 
@@ -163,7 +177,6 @@ static void update_world(World *world) {
 
     // -------------------------------------------------------------------
     // update keyboard input
-
     Vector2 dir = Vector2Zero();
     dir.y += IsKeyDown(KEY_UP);
     dir.y -= IsKeyDown(KEY_DOWN);
@@ -221,8 +234,9 @@ static void update_world(World *world) {
             },
             .speed = 5.0,
         };
+
         enemy.word.font = world->enemy_word_font;
-        strcpy(enemy.word.chars, TextFormat("enemy_%d", world->n_enemies));
+        strcpy(enemy.word.chars, world->enemy_names[rand() % world->n_enemy_names]);
         world->enemies[world->n_enemies++] = enemy;
     }
 
