@@ -2,6 +2,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rcamera.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,7 @@
 #define SCREEN_HEIGHT 768
 
 #define MAX_N_ENEMIES 256
-#define MAX_WORD_LENGTH 32
+#define MAX_WORD_LEN 32
 
 typedef struct Player {
     Transform transform;
@@ -23,7 +24,7 @@ typedef struct Player {
 typedef struct Enemy {
     Transform transform;
     float speed;
-    char name[MAX_WORD_LENGTH];
+    char name[MAX_WORD_LEN];
 } Enemy;
 
 typedef struct World {
@@ -31,6 +32,8 @@ typedef struct World {
 
     int n_enemies;
     Enemy enemies[MAX_N_ENEMIES];
+
+    char text_input[MAX_WORD_LEN];
 
     float time;
     float spawn_countdown;
@@ -51,8 +54,8 @@ typedef struct Word {
     Font font;
     Rectangle rec;
     Vector2 text_pos;
-    char chars[MAX_WORD_LENGTH];
-    Color char_colors[MAX_WORD_LENGTH];
+    char chars[MAX_WORD_LEN];
+    Color char_colors[MAX_WORD_LEN];
 } Word;
 
 int main(void) {
@@ -92,8 +95,12 @@ int main(void) {
             word.rec = rec;
             word.text_pos = text_pos;
             strcpy(word.chars, enemy.name);
+            bool is_combo = true;
             for (int i = 0; i < strlen(word.chars); ++i) {
-                word.char_colors[i] = RED;
+                char name_c = word.chars[i];
+                char text_input_c = WORLD.text_input[i];
+                is_combo = text_input_c != '\0' && is_combo && name_c == text_input_c;
+                word.char_colors[i] = is_combo ? GREEN : WHITE;
             }
 
             enemy_words[i] = word;
@@ -160,6 +167,9 @@ static void update_world(World *world) {
     world->time += dt;
     world->spawn_countdown -= dt;
 
+    int text_input_len = strlen(WORLD.text_input);
+    int pressed_char = GetCharPressed();
+
     Player *player = &world->player;
 
     // -------------------------------------------------------------------
@@ -177,6 +187,11 @@ static void update_world(World *world) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * dt);
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
+    } else if (IsKeyPressedRepeat(KEY_BACKSPACE) && text_input_len > 0) {
+        WORLD.text_input[--text_input_len] = '\0';
+    } else if (text_input_len < MAX_WORD_LEN && pressed_char <= 127) {
+        WORLD.text_input[text_input_len++] = pressed_char;
+        WORLD.text_input[text_input_len + 1] = '\0';
     }
 
     // -------------------------------------------------------------------
@@ -262,7 +277,9 @@ static void draw_text(
     for (int i = 0; i < n_chars; i++) {
         int ch = text[i];
         int index = GetGlyphIndex(font, ch);
-        Color color = colors[i];
+        Color color;
+        if (colors) color = colors[i];
+        else color = WHITE;
 
         if (ch != ' ') {
             DrawTextCodepoint(
