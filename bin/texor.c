@@ -116,11 +116,11 @@ static void update_world(World *world) {
     Player *player = &world->player;
 
     // -------------------------------------------------------------------
-    // camera
+    // update camera
     update_free_orbit_camera(&world->camera);
 
     // -------------------------------------------------------------------
-    // enemy words
+    // update enemy words
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
         Word *word = &enemy->word;
@@ -147,33 +147,65 @@ static void update_world(World *world) {
             char name_c = word->chars[i];
             char text_input_c = world->text_input[i];
             is_combo = text_input_c != '\0' && is_combo && name_c == text_input_c;
-            word->char_colors[i] = is_combo ? GREEN : WHITE;
+
+            Color color;
+            if (is_combo) {
+                color = GREEN;
+            } else if (i < text_input_len) {
+                color = RED;
+            } else {
+                color = WHITE;
+            }
+
+            word->char_colors[i] = color;
         }
     }
 
     // -------------------------------------------------------------------
-    // keyboard input
+    // update keyboard input
+
     Vector2 dir = Vector2Zero();
     dir.y += IsKeyDown(KEY_UP);
     dir.y -= IsKeyDown(KEY_DOWN);
     dir.x -= IsKeyDown(KEY_LEFT);
     dir.x += IsKeyDown(KEY_RIGHT);
+
     if (Vector2Length(dir) > EPSILON) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * dt);
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && text_input_len > 0) {
         WORLD.text_input[--text_input_len] = '\0';
-    } else if (IsKeyPressed(KEY_ENTER)) {
+    } else if (IsKeyPressed(KEY_ENTER) && text_input_len > 0) {
+        // kill the enemy
+        int kill_enemy_idx = -1;
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy *enemy = &world->enemies[i];
+            if (strcmp(world->text_input, enemy->word.chars) == 0) {
+                kill_enemy_idx = i;
+                break;
+            }
+        }
+
+        if (kill_enemy_idx >= 0) {
+            world->n_enemies -= 1;
+            memmove(
+                &world->enemies[kill_enemy_idx],
+                &world->enemies[kill_enemy_idx + 1],
+                sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
+            );
+        }
+
+        world->text_input[0] = '\0';
     } else if (text_input_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         WORLD.text_input[text_input_len++] = pressed_char;
-        WORLD.text_input[text_input_len + 1] = '\0';
+        WORLD.text_input[text_input_len] = '\0';
     }
 
     // -------------------------------------------------------------------
-    // enemies spawn
+    // update enemies spawn
     if (world->spawn_countdown < 0.0 && world->n_enemies < MAX_N_ENEMIES) {
-        world->spawn_countdown = fmaxf(0.1 * expf(world->time * 0.001), 1.0);
+        world->spawn_countdown = fmaxf(5.0 * expf(world->time * 0.001), 1.0);
 
         float angle = ((float)rand() / RAND_MAX) * 2 * PI;
 
@@ -195,7 +227,7 @@ static void update_world(World *world) {
     }
 
     // -------------------------------------------------------------------
-    // enemies action
+    // update enemies action
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
         Vector3 vec = Vector3Subtract(
