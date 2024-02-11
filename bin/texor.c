@@ -109,7 +109,9 @@ typedef struct World {
     Enemy enemies[MAX_N_ENEMIES];
 
     char prompt[MAX_WORD_LEN];
+    char submit_word[MAX_WORD_LEN];
 
+    float dt;
     float time;
     float spawn_countdown;
     float spawn_radius;
@@ -126,6 +128,11 @@ static World WORLD;
 
 static void init_world(World *world);
 static void update_world(World *world);
+static void update_prompt(World *world);
+static void update_enemies_spawn(World *world);
+static void update_skills(World *world);
+static void update_enemies(World *world);
+static void update_player(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
 static void draw_world(World *world);
 static void draw_text(
@@ -231,167 +238,142 @@ static void init_world(World *world) {
 }
 
 static void update_world(World *world) {
-    float dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
-    world->time += dt;
-    world->spawn_countdown -= dt;
+    world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
+    world->time += world->dt;
+    world->spawn_countdown -= world->dt;
 
-    int prompt_len = strlen(WORLD.prompt);
-    int pressed_char = GetCharPressed();
-
-    Player *player = &world->player;
-
-    // -------------------------------------------------------------------
-    // update camera
+    update_prompt(world);
+    update_enemies_spawn(world);
     update_free_orbit_camera(&world->camera);
+    update_skills(world);
+    update_enemies(world);
+    update_player(world);
 
-    // -------------------------------------------------------------------
-    // update prompt enter
-    if (IsKeyPressed(KEY_ENTER) && prompt_len > 0) {
-        // kill enemy
-        for (int i = 0; i < world->n_enemies; ++i) {
-            Enemy *enemy = &world->enemies[i];
-            bool is_match = strcmp(world->prompt, enemy->name) == 0;
-            if (is_match && world->state == STATE_PLAYING) {
-                world->n_enemies -= 1;
-                memmove(
-                    &world->enemies[i],
-                    &world->enemies[i + 1],
-                    sizeof(Enemy) * (world->n_enemies - i)
-                );
-                break;
-            }
-        }
+    world->submit_word[0] = '\0';
+}
 
-        // apply skill
-        for (int i = 0; i < world->n_skills; ++i) {
-            Skill *skill = &world->skills[i];
-            bool is_match = strcmp(world->prompt, skill->name) == 0;
-            bool is_ready = skill->time > skill->cooldown;
-            if (is_match && is_ready) {
-                if (skill->type == SKILL_PAUSE && world->state == STATE_PLAYING) {
-                    skill->time = skill->cooldown;
-                    strcpy(skill->name, "continue");
-                    world->state = STATE_PAUSE;
-                } else if (skill->type == SKILL_PAUSE && world->state == STATE_PAUSE) {
-                    skill->time = 0.0;
-                    strcpy(skill->name, "pause");
-                    world->state = STATE_PLAYING;
-                } else if (skill->type == SKILL_CRYONICS && world->state == STATE_PLAYING) {
-                    skill->time = 0.0;
-                    for (int i = 0; i < world->n_enemies; ++i) {
-                        Enemy *enemy = &world->enemies[i];
-                        float dist = Vector3Distance(
-                            enemy->transform.translation,
-                            world->player.transform.translation
-                        );
-                        if (dist < skill->cryonics.radius) {
-                            Effect effect = {
-                                .type = EFFECT_FREEZE,
-                                .freeze = {.time = skill->cryonics.duration}};
-                            if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
-                                enemy->effects[enemy->n_effects++] = effect;
-                            }
-                        }
-                    }
-                } else if (skill->type == SKILL_REPULSE && world->state == STATE_PLAYING) {
-                    skill->time = 0.0;
-                    for (int i = 0; i < world->n_enemies; ++i) {
-                        Enemy *enemy = &world->enemies[i];
-                        Vector3 vec = Vector3Subtract(
-                            enemy->transform.translation,
-                            world->player.transform.translation
-                        );
-                        float dist = Vector3Length(vec);
-                        Vector3 dir = Vector3Normalize(vec);
-                        if (dist < skill->repulse.radius) {
-                            Effect effect = {
-                                .type = EFFECT_IMPULSE,
-                                .impulse = {
-                                    .speed = skill->repulse.speed,
-                                    .deceleration = skill->repulse.deceleration,
-                                    .direction = dir}};
-                            if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
-                                enemy->effects[enemy->n_effects++] = effect;
-                            }
-                        }
-                    }
-                } else if (skill->type == SKILL_DECAY && world->state == STATE_PLAYING) {
-                    skill->time = 0.0;
-                    for (int i = 0; i < world->n_enemies; ++i) {
-                        Enemy *enemy = &world->enemies[i];
-                        float dist = Vector3Distance(
-                            enemy->transform.translation,
-                            world->player.transform.translation
-                        );
-                        if (dist < skill->cryonics.radius) {
-                            int len = max(1, strlen(enemy->name) / 2);
-                            enemy->name[len] = '\0';
-                        }
-                    }
-                }
-            }
-        }
-
-        // reset the prompt
+static void update_prompt(World *world) {
+    int prompt_len = strlen(world->prompt);
+    int pressed_char = GetCharPressed();
+    if (IsKeyPressed(KEY_ENTER) > 0) {
+        strcpy(world->submit_word, world->prompt);
         world->prompt[0] = '\0';
-    }
-
-    // -------------------------------------------------------------------
-    // update skills
-    for (int i = 0; i < world->n_skills; ++i) {
-        Skill *skill = &world->skills[i];
-        skill->time += dt;
-    }
-
-    // -------------------------------------------------------------------
-    // update keyboard input
-    Vector2 dir = Vector2Zero();
-    dir.y += IsKeyDown(KEY_UP);
-    dir.y -= IsKeyDown(KEY_DOWN);
-    dir.x -= IsKeyDown(KEY_LEFT);
-    dir.x += IsKeyDown(KEY_RIGHT);
-
-    if (Vector2Length(dir) > EPSILON) {
-        Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * dt);
-        player->transform.translation.x += step.x;
-        player->transform.translation.y += step.y;
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
         world->prompt[--prompt_len] = '\0';
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         world->prompt[prompt_len++] = pressed_char;
         world->prompt[prompt_len] = '\0';
     }
+}
 
-    // -------------------------------------------------------------------
-    // update enemies spawn
-    if (world->spawn_countdown < 0.0 && world->n_enemies < MAX_N_ENEMIES) {
-        world->spawn_countdown = fmaxf(
-            BASE_SPAWN_PERIOD * expf(world->time * 0.001), 1.0
-        );
+static void update_enemies_spawn(World *world) {
+    if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
 
-        float angle = ((float)rand() / RAND_MAX) * 2 * PI;
+    world->spawn_countdown = fmaxf(BASE_SPAWN_PERIOD * expf(world->time * 0.001), 1.0);
 
-        Enemy enemy = {
-            .transform={
-                .translation = {
-                    .x = world->spawn_radius * cos(angle),
-                    .y = world->spawn_radius * sin(angle),
-                    .z = 0.0,
-                },
-                .rotation = QuaternionIdentity(),
-                .scale = Vector3One(),
+    float angle = ((float)rand() / RAND_MAX) * 2 * PI;
+
+    Enemy enemy = {
+        .transform={
+            .translation = {
+                .x = world->spawn_radius * cos(angle),
+                .y = world->spawn_radius * sin(angle),
+                .z = 0.0,
             },
-            .speed = 5.0,
-        };
+            .rotation = QuaternionIdentity(),
+            .scale = Vector3One(),
+        },
+        .speed = 5.0,
+    };
 
-        strcpy(enemy.name, world->enemy_names[rand() % world->n_enemy_names]);
-        world->enemies[world->n_enemies++] = enemy;
+    strcpy(enemy.name, world->enemy_names[rand() % world->n_enemy_names]);
+    world->enemies[world->n_enemies++] = enemy;
+}
+
+static void update_skills(World *world) {
+    float dt = world->dt;
+    const char *submit_word = world->submit_word;
+
+    for (int i = 0; i < world->n_skills; ++i) {
+        Skill *skill = &world->skills[i];
+        skill->time += dt;
+
+        bool is_match = strcmp(submit_word, skill->name) == 0;
+        bool is_ready = skill->time > skill->cooldown;
+        if (is_match && is_ready) {
+            if (skill->type == SKILL_PAUSE && world->state == STATE_PLAYING) {
+                skill->time = skill->cooldown + 1.0;
+                strcpy(skill->name, "continue");
+                world->state = STATE_PAUSE;
+            } else if (skill->type == SKILL_PAUSE && world->state == STATE_PAUSE) {
+                skill->time = 0.0;
+                strcpy(skill->name, "pause");
+                world->state = STATE_PLAYING;
+            } else if (skill->type == SKILL_CRYONICS && world->state == STATE_PLAYING) {
+                skill->time = 0.0;
+                for (int i = 0; i < world->n_enemies; ++i) {
+                    Enemy *enemy = &world->enemies[i];
+                    float dist = Vector3Distance(
+                        enemy->transform.translation, world->player.transform.translation
+                    );
+                    if (dist < skill->cryonics.radius) {
+                        Effect effect = {
+                            .type = EFFECT_FREEZE,
+                            .freeze = {.time = skill->cryonics.duration}};
+                        if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
+                            enemy->effects[enemy->n_effects++] = effect;
+                        }
+                    }
+                }
+            } else if (skill->type == SKILL_REPULSE && world->state == STATE_PLAYING) {
+                skill->time = 0.0;
+                for (int i = 0; i < world->n_enemies; ++i) {
+                    Enemy *enemy = &world->enemies[i];
+                    Vector3 vec = Vector3Subtract(
+                        enemy->transform.translation, world->player.transform.translation
+                    );
+                    float dist = Vector3Length(vec);
+                    Vector3 dir = Vector3Normalize(vec);
+                    if (dist < skill->repulse.radius) {
+                        Effect effect = {
+                            .type = EFFECT_IMPULSE,
+                            .impulse = {
+                                .speed = skill->repulse.speed,
+                                .deceleration = skill->repulse.deceleration,
+                                .direction = dir}};
+                        if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
+                            enemy->effects[enemy->n_effects++] = effect;
+                        }
+                    }
+                }
+            } else if (skill->type == SKILL_DECAY && world->state == STATE_PLAYING) {
+                skill->time = 0.0;
+                for (int i = 0; i < world->n_enemies; ++i) {
+                    Enemy *enemy = &world->enemies[i];
+                    float dist = Vector3Distance(
+                        enemy->transform.translation, world->player.transform.translation
+                    );
+                    if (dist < skill->cryonics.radius) {
+                        int len = max(1, strlen(enemy->name) / 2);
+                        enemy->name[len] = '\0';
+                    }
+                }
+            }
+        }
     }
+}
 
-    // -------------------------------------------------------------------
-    // update enemies
+static void update_enemies(World *world) {
+    const char *submit_word = world->submit_word;
+    int kill_enemy_idx = -1;
+
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
+
+        if (strcmp(submit_word, enemy->name) == 0) {
+            kill_enemy_idx = i;
+            continue;
+        }
 
         // update enemy effects
         bool can_move = true;
@@ -403,15 +385,15 @@ static void update_world(World *world) {
         for (int effect_i = 0; effect_i < enemy->n_effects; ++effect_i) {
             Effect effect = enemy->effects[effect_i];
             if (effect.type == EFFECT_FREEZE && effect.freeze.time > 0) {
-                effect.freeze.time -= dt;
+                effect.freeze.time -= world->dt;
                 can_move = false;
                 can_attack = false;
 
                 active_effects[n_active_effects++] = effect;
             } else if (effect.type == EFFECT_IMPULSE && effect.impulse.speed > 0.0) {
                 Vector3 dir = Vector3Normalize(effect.impulse.direction);
-                step = Vector3Scale(dir, effect.impulse.speed * dt);
-                effect.impulse.speed -= effect.impulse.deceleration * dt;
+                step = Vector3Scale(dir, effect.impulse.speed * world->dt);
+                effect.impulse.speed -= effect.impulse.deceleration * world->dt;
                 can_move = false;
                 can_attack = false;
 
@@ -426,16 +408,40 @@ static void update_world(World *world) {
         enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
 
         Vector3 vec = Vector3Subtract(
-            player->transform.translation, enemy->transform.translation
+            world->player.transform.translation, enemy->transform.translation
         );
         if (can_move && Vector3Length(vec) > 2.0) {
             // move towards the player
             Vector3 dir = Vector3Normalize(vec);
-            Vector3 step = Vector3Scale(dir, enemy->speed * dt);
+            Vector3 step = Vector3Scale(dir, enemy->speed * world->dt);
             enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
         } else if (can_attack) {
             // attack the player
         }
+    }
+
+    if (kill_enemy_idx != -1) {
+        world->n_enemies -= 1;
+        memmove(
+            &world->enemies[kill_enemy_idx],
+            &world->enemies[kill_enemy_idx + 1],
+            sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
+        );
+    }
+}
+
+static void update_player(World *world) {
+    Vector2 dir = Vector2Zero();
+    dir.y += IsKeyDown(KEY_UP);
+    dir.y -= IsKeyDown(KEY_DOWN);
+    dir.x -= IsKeyDown(KEY_LEFT);
+    dir.x += IsKeyDown(KEY_RIGHT);
+
+    int pressed_char = GetCharPressed();
+    if (Vector2Length(dir) > EPSILON) {
+        Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * world->dt);
+        world->player.transform.translation.x += step.x;
+        world->player.transform.translation.y += step.y;
     }
 }
 
