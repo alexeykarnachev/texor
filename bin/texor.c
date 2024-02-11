@@ -50,6 +50,11 @@ typedef struct Skill {
     SkillType type;
 } Skill;
 
+typedef enum WorldState {
+    STATE_PLAYING,
+    STATE_PAUSE,
+} WorldState;
+
 typedef struct World {
     Player player;
 
@@ -65,6 +70,7 @@ typedef struct World {
     float spawn_countdown;
     float spawn_radius;
     Camera3D camera;
+    WorldState state;
 
     Font word_font;
 
@@ -109,7 +115,7 @@ static void init_world(World *world) {
 
     // pause skill
     Skill skill = {0};
-    skill.cooldown = 5.0;
+    skill.cooldown = 2.0;
     skill.duration = FLT_MAX;
     skill.time = 0.0;
     skill.type = SKILL_PAUSE;
@@ -118,11 +124,11 @@ static void init_world(World *world) {
 
     // dummy skill (for testing)
     memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 5.0;
-    skill.duration = FLT_MAX;
+    skill.cooldown = 2.0;
+    skill.duration = 2.0;
     skill.time = 0.0;
     skill.type = SKILL_TEST;
-    strcpy(skill.name, "test_test_228");
+    strcpy(skill.name, "test");
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
@@ -155,23 +161,68 @@ static void init_world(World *world) {
 
     // -------------------------------------------------------------------
     // init game parameters
+    world->state = STATE_PLAYING;
     world->spawn_radius = 28.0;
 }
 
 static void update_world(World *world) {
-    float dt = GetFrameTime();
+    float dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
     world->time += dt;
     world->spawn_countdown -= dt;
 
     int prompt_len = strlen(WORLD.prompt);
     int pressed_char = GetCharPressed();
-    bool is_enter_prompt = IsKeyPressed(KEY_ENTER) && prompt_len > 0;
 
     Player *player = &world->player;
 
     // -------------------------------------------------------------------
     // update camera
     update_free_orbit_camera(&world->camera);
+
+    // -------------------------------------------------------------------
+    // update prompt enter
+    if (IsKeyPressed(KEY_ENTER) && prompt_len > 0) {
+        // kill enemy
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy *enemy = &world->enemies[i];
+            bool is_match = strcmp(world->prompt, enemy->name) == 0;
+            if (is_match && world->state == STATE_PLAYING) {
+                world->n_enemies -= 1;
+                memmove(
+                    &world->enemies[i],
+                    &world->enemies[i + 1],
+                    sizeof(Enemy) * (world->n_enemies - i)
+                );
+                break;
+            }
+        }
+
+        // apply skill
+        for (int i = 0; i < world->n_skills; ++i) {
+            Skill *skill = &world->skills[i];
+            bool is_match = strcmp(world->prompt, skill->name) == 0;
+            bool is_ready = !skill->is_active && skill->time > skill->cooldown;
+            if (is_match && is_ready) {
+                if (skill->type == SKILL_PAUSE && world->state == STATE_PLAYING) {
+                    skill->is_active = false;
+                    skill->time = skill->cooldown;
+                    strcpy(skill->name, "continue");
+                    world->state = STATE_PAUSE;
+                } else if (skill->type == SKILL_PAUSE && world->state == STATE_PAUSE) {
+                    skill->is_active = false;
+                    skill->time = 0.0;
+                    strcpy(skill->name, "pause");
+                    world->state = STATE_PLAYING;
+                } else if (skill->type == SKILL_TEST && world->state == STATE_PLAYING) {
+                    skill->is_active = true;
+                    skill->time = 0.0;
+                }
+            }
+        }
+
+        // reset the prompt
+        world->prompt[0] = '\0';
+    }
 
     // -------------------------------------------------------------------
     // update skills
@@ -197,10 +248,10 @@ static void update_world(World *world) {
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
-        WORLD.prompt[--prompt_len] = '\0';
+        world->prompt[--prompt_len] = '\0';
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
-        WORLD.prompt[prompt_len++] = pressed_char;
-        WORLD.prompt[prompt_len] = '\0';
+        world->prompt[prompt_len++] = pressed_char;
+        world->prompt[prompt_len] = '\0';
     }
 
     // -------------------------------------------------------------------
@@ -231,17 +282,13 @@ static void update_world(World *world) {
 
     // -------------------------------------------------------------------
     // update enemies action
-    int kill_enemy_idx = -1;
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
         Vector3 vec = Vector3Subtract(
             player->transform.translation, enemy->transform.translation
         );
 
-        if (is_enter_prompt && kill_enemy_idx == -1
-            && strcmp(world->prompt, enemy->name) == 0) {
-            kill_enemy_idx = i;
-        } else if (Vector3Length(vec) > 2.0) {
+        if (Vector3Length(vec) > 2.0) {
             // move towards the player
             Vector3 dir = Vector3Normalize(vec);
             Vector3 step = Vector3Scale(dir, enemy->speed * dt);
@@ -250,19 +297,6 @@ static void update_world(World *world) {
             // attack the player
         }
     }
-
-    if (kill_enemy_idx >= 0) {
-        world->n_enemies -= 1;
-        memmove(
-            &world->enemies[kill_enemy_idx],
-            &world->enemies[kill_enemy_idx + 1],
-            sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
-        );
-    }
-
-    // -------------------------------------------------------------------
-    // reset prompt if enter pressed
-    if (is_enter_prompt) world->prompt[0] = '\0';
 }
 
 static void update_free_orbit_camera(Camera3D *camera) {
@@ -380,7 +414,7 @@ static void draw_world(World *world) {
                 float ratio;
                 Color color;
                 if (skill->is_active) {
-                    ratio = fminf(1.0, skill->time / skill->duration);
+                    ratio = fminf(1.0, 1.0 - skill->time / skill->duration);
                     color = GREEN;
                 } else {
                     ratio = fminf(1.0, skill->time / skill->cooldown);
