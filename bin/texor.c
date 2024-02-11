@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+#define max(a, b) (((a) > (b)) ? (a) : (b))
 #define print_vec3(v) (printf("%f, %f, %f\n", v.x, v.y, v.z))
 #define print_vec2(v) (printf("%f, %f\n", v.x, v.y))
 
@@ -49,6 +51,7 @@ typedef enum SkillType {
     SKILL_PAUSE,
     SKILL_CRYONICS,
     SKILL_REPULSE,
+    SKILL_DECAY,
     N_SKILLS,
 } SkillType;
 
@@ -70,6 +73,11 @@ typedef struct Skill {
             float speed;
             float deceleration;
         } repulse;
+
+        struct {
+            float radius;
+            float strength;
+        } decay;
     };
 } Skill;
 
@@ -176,6 +184,16 @@ static void init_world(World *world) {
     skill.repulse.deceleration = 150.0;
     skill.repulse.radius = 20.0;
     strcpy(skill.name, "repulse");
+    world->skills[world->n_skills++] = skill;
+
+    // decay skill
+    memset(&skill, 0, sizeof(Skill));
+    skill.cooldown = 2.0;
+    skill.time = 0.0;
+    skill.type = SKILL_DECAY;
+    skill.decay.strength = 0.5;
+    skill.decay.radius = 20.0;
+    strcpy(skill.name, "decay");
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
@@ -295,6 +313,19 @@ static void update_world(World *world) {
                             if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
                                 enemy->effects[enemy->n_effects++] = effect;
                             }
+                        }
+                    }
+                } else if (skill->type == SKILL_DECAY && world->state == STATE_PLAYING) {
+                    skill->time = 0.0;
+                    for (int i = 0; i < world->n_enemies; ++i) {
+                        Enemy *enemy = &world->enemies[i];
+                        float dist = Vector3Distance(
+                            enemy->transform.translation,
+                            world->player.transform.translation
+                        );
+                        if (dist < skill->cryonics.radius) {
+                            int len = max(1, strlen(enemy->name) / 2);
+                            enemy->name[len] = '\0';
                         }
                     }
                 }
