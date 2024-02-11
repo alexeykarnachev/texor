@@ -52,6 +52,9 @@ typedef enum SkillType {
     SKILL_CRYONICS,
     SKILL_REPULSE,
     SKILL_DECAY,
+
+    SKILL_RESTART_GAME,
+    SKILL_EXIT_GAME,
     N_SKILLS,
 } SkillType;
 
@@ -118,30 +121,35 @@ typedef struct World {
     char prompt[MAX_WORD_LEN];
     char submit_word[MAX_WORD_LEN];
 
+    bool should_exit;
     float dt;
     float time;
     float spawn_countdown;
     float spawn_radius;
     Camera3D camera;
     WorldState state;
+} World;
 
+typedef struct Resources {
     Font word_font;
 
     int n_enemy_names;
     char enemy_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
-} World;
+} Resources;
 
+static Resources RESOURCES;
 static World WORLD;
 
+static void init_resources(Resources *resources);
 static void init_world(World *world);
-static void update_world(World *world);
+static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
-static void update_enemies_spawn(World *world);
+static void update_enemies_spawn(World *world, Resources *resources);
 static void update_skills(World *world);
 static void update_enemies(World *world);
 static void update_player(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
-static void draw_world(World *world);
+static void draw_world(World *world, Resources *resources);
 static void draw_text(
     Font font, const char *text, Vector2 position, const char *match_prompt
 );
@@ -151,22 +159,35 @@ int main(void) {
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "texor");
     SetTargetFPS(60);
 
+    init_resources(&RESOURCES);
     init_world(&WORLD);
 
-    while (!WindowShouldClose()) {
-        update_world(&WORLD);
-        draw_world(&WORLD);
+    while (!WORLD.should_exit) {
+        update_world(&WORLD, &RESOURCES);
+        draw_world(&WORLD, &RESOURCES);
     }
+}
+
+static void init_resources(Resources *resources) {
+    // -------------------------------------------------------------------
+    // init fonts
+    const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
+    resources->word_font = LoadFontEx(font_file_path, 30, 0, 0);
+    SetTextureFilter(resources->word_font.texture, TEXTURE_FILTER_BILINEAR);
+
+    // -------------------------------------------------------------------
+    // init names
+    FILE *f = fopen("./resources/words/enemies.txt", "r");
+    while (fgets(resources->enemy_names[resources->n_enemy_names], MAX_WORD_LEN, f)) {
+        char *name = resources->enemy_names[resources->n_enemy_names];
+        name[strcspn(name, "\n")] = 0;
+        resources->n_enemy_names += 1;
+    }
+    fclose(f);
 }
 
 static void init_world(World *world) {
     memset(world, 0, sizeof(World));
-
-    // -------------------------------------------------------------------
-    // init fonts
-    const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
-    world->word_font = LoadFontEx(font_file_path, 30, 0, 0);
-    SetTextureFilter(world->word_font.texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
     // init skills
@@ -211,16 +232,6 @@ static void init_world(World *world) {
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
-    // init names
-    FILE *f = fopen("./resources/words/enemies.txt", "r");
-    while (fgets(world->enemy_names[world->n_enemy_names], MAX_WORD_LEN, f)) {
-        char *name = world->enemy_names[world->n_enemy_names];
-        name[strcspn(name, "\n")] = 0;
-        world->n_enemy_names += 1;
-    }
-    fclose(f);
-
-    // -------------------------------------------------------------------
     // init player
     world->player.transform.rotation = QuaternionIdentity();
     world->player.transform.scale = Vector3One();
@@ -246,12 +257,16 @@ static void init_world(World *world) {
     world->spawn_radius = 28.0;
 }
 
-static void update_world(World *world) {
+static void update_world(World *world, Resources *resources) {
     world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
     world->time += world->dt;
 
+    bool is_altf4_pressed = IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_F4);
+    world->should_exit = (WindowShouldClose() || is_altf4_pressed)
+                         && !IsKeyPressed(KEY_ESCAPE);
+
     update_prompt(world);
-    update_enemies_spawn(world);
+    update_enemies_spawn(world, resources);
     update_free_orbit_camera(&world->camera);
     update_skills(world);
     update_enemies(world);
@@ -274,7 +289,7 @@ static void update_prompt(World *world) {
     }
 }
 
-static void update_enemies_spawn(World *world) {
+static void update_enemies_spawn(World *world, Resources *resources) {
     world->spawn_countdown -= world->dt;
 
     if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
@@ -294,13 +309,13 @@ static void update_enemies_spawn(World *world) {
             .scale = Vector3One(),
         },
         .speed = 5.0,
-        .attack_strength = 10.0,
+        .attack_strength = 100.0,
         .attack_radius = 2.0,
         .attack_cooldown = 1.0,
         .recent_attack_time = 0.0,
     };
 
-    strcpy(enemy.name, world->enemy_names[rand() % world->n_enemy_names]);
+    strcpy(enemy.name, resources->enemy_names[rand() % resources->n_enemy_names]);
     world->enemies[world->n_enemies++] = enemy;
 }
 
@@ -323,6 +338,10 @@ static void update_skills(World *world) {
                 skill->time = 0.0;
                 strcpy(skill->name, "pause");
                 world->state = STATE_PLAYING;
+            } else if (skill->type == SKILL_RESTART_GAME) {
+                init_world(world);
+            } else if (skill->type == SKILL_EXIT_GAME) {
+                world->should_exit = true;
             } else if (skill->type == SKILL_CRYONICS && world->state == STATE_PLAYING) {
                 skill->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
@@ -453,6 +472,18 @@ static void update_player(World *world) {
     Player *player = &world->player;
     if (player->health <= 0.0) {
         world->state = STATE_GAME_OVER;
+
+        Skill *skill = &world->skills[0];
+        skill->type = SKILL_RESTART_GAME;
+        skill->cooldown = 0.0;
+        strcpy(skill->name, "restart");
+
+        skill = &world->skills[1];
+        skill->type = SKILL_EXIT_GAME;
+        skill->cooldown = 0.0;
+        strcpy(skill->name, "exit");
+
+        world->n_skills = 2;
         return;
     }
 
@@ -502,7 +533,7 @@ static void update_free_orbit_camera(Camera3D *camera) {
     CameraMoveToTarget(camera, -mouse_wheel_move * zoom_speed);
 }
 
-static void draw_world(World *world) {
+static void draw_world(World *world, Resources *resources) {
     BeginDrawing();
     {
         // scene
@@ -543,7 +574,7 @@ static void draw_world(World *world) {
                     enemy.transform.translation, world->camera
                 );
                 Vector2 text_size = MeasureTextEx(
-                    world->word_font, enemy.name, world->word_font.baseSize, 0
+                    resources->word_font, enemy.name, resources->word_font.baseSize, 0
                 );
 
                 Vector2 rec_size = Vector2Scale(text_size, 1.2);
@@ -555,17 +586,17 @@ static void draw_world(World *world) {
                 Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
                 Vector2 text_pos = {
                     rec_center.x - 0.5 * text_size.x,
-                    rec_center.y - 0.5 * world->word_font.baseSize};
+                    rec_center.y - 0.5 * resources->word_font.baseSize};
 
                 DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(world->word_font, enemy.name, text_pos, world->prompt);
+                draw_text(resources->word_font, enemy.name, text_pos, world->prompt);
             }
         }
 
         // draw prompt
         {
             static char prompt[3] = {'>', ' ', '\0'};
-            Font font = world->word_font;
+            Font font = resources->word_font;
             Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
             Vector2 text_size = MeasureTextEx(font, world->prompt, font.baseSize, 0);
             float y = GetScreenHeight() - font.baseSize - 5;
@@ -600,10 +631,9 @@ static void draw_world(World *world) {
             DrawRectangleRounded(rec, 0.5, 16, color);
 
             // draw skills
-            Font font = world->word_font;
             for (int i = 0; i < world->n_skills; ++i) {
                 Skill *skill = &world->skills[i];
-                float y = 30.0 + 1.8 * i * world->word_font.baseSize;
+                float y = 40.0 + 1.8 * i * resources->word_font.baseSize;
 
                 float ratio;
                 ratio = fminf(1.0, skill->time / skill->cooldown);
@@ -614,8 +644,10 @@ static void draw_world(World *world) {
                     .w = 1.0,
                 });
                 float width = 190.0 * ratio;
-                draw_text(font, skill->name, (Vector2){8.0, y}, world->prompt);
-                Rectangle rec = {8.0, y + world->word_font.baseSize, width, 5.0};
+                draw_text(
+                    resources->word_font, skill->name, (Vector2){8.0, y}, world->prompt
+                );
+                Rectangle rec = {8.0, y + resources->word_font.baseSize, width, 5.0};
                 DrawRectangleRec(rec, color);
             }
         }
