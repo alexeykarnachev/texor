@@ -18,11 +18,25 @@
 #define MAX_N_ENEMIES 256
 #define MAX_WORD_LEN 33
 #define MAX_N_ENEMY_NAMES 1000
+#define MAX_N_ENEMY_EFFECTS 16
 
 #define BASE_SPAWN_PERIOD 2.0
 
 #define UI_BACKGROUND_COLOR ((Color){20, 20, 20, 255})
 #define UI_OUTLINE_COLOR ((Color){0, 40, 0, 255})
+
+typedef enum EffectType {
+    EFFECT_FREEZE,
+} EffectType;
+
+typedef struct Effect {
+    EffectType type;
+    union {
+        struct {
+            float time;
+        } freeze;
+    };
+} Effect;
 
 typedef struct Player {
     Transform transform;
@@ -32,22 +46,30 @@ typedef struct Enemy {
     Transform transform;
     float speed;
     char name[MAX_WORD_LEN];
+
+    int n_effects;
+    Effect effects[MAX_N_ENEMY_EFFECTS];
 } Enemy;
 
 typedef enum SkillType {
     SKILL_PAUSE,
-    SKILL_TEST,
+    SKILL_CRYONICS,
     N_SKILLS,
 } SkillType;
 
 typedef struct Skill {
     float cooldown;
-    float duration;
     float time;
-    bool is_active;
     char name[MAX_WORD_LEN];
 
     SkillType type;
+
+    union {
+        struct {
+            float radius;
+            float duration;
+        } cryonics;
+    };
 } Skill;
 
 typedef enum WorldState {
@@ -116,19 +138,19 @@ static void init_world(World *world) {
     // pause skill
     Skill skill = {0};
     skill.cooldown = 2.0;
-    skill.duration = FLT_MAX;
     skill.time = 0.0;
     skill.type = SKILL_PAUSE;
     strcpy(skill.name, "pause");
     world->skills[world->n_skills++] = skill;
 
-    // dummy skill (for testing)
+    // cryonics skill
     memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 2.0;
-    skill.duration = 2.0;
+    skill.cooldown = 5.0;
     skill.time = 0.0;
-    skill.type = SKILL_TEST;
-    strcpy(skill.name, "test");
+    skill.type = SKILL_CRYONICS;
+    skill.cryonics.duration = 2.0;
+    skill.cryonics.radius = 10.0;
+    strcpy(skill.name, "cryonics");
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
@@ -201,21 +223,33 @@ static void update_world(World *world) {
         for (int i = 0; i < world->n_skills; ++i) {
             Skill *skill = &world->skills[i];
             bool is_match = strcmp(world->prompt, skill->name) == 0;
-            bool is_ready = !skill->is_active && skill->time > skill->cooldown;
+            bool is_ready = skill->time > skill->cooldown;
             if (is_match && is_ready) {
                 if (skill->type == SKILL_PAUSE && world->state == STATE_PLAYING) {
-                    skill->is_active = false;
                     skill->time = skill->cooldown;
                     strcpy(skill->name, "continue");
                     world->state = STATE_PAUSE;
                 } else if (skill->type == SKILL_PAUSE && world->state == STATE_PAUSE) {
-                    skill->is_active = false;
                     skill->time = 0.0;
                     strcpy(skill->name, "pause");
                     world->state = STATE_PLAYING;
-                } else if (skill->type == SKILL_TEST && world->state == STATE_PLAYING) {
-                    skill->is_active = true;
+                } else if (skill->type == SKILL_CRYONICS && world->state == STATE_PLAYING) {
                     skill->time = 0.0;
+                    for (int i = 0; i < world->n_enemies; ++i) {
+                        Enemy *enemy = &world->enemies[i];
+                        float dist = Vector3Distance(
+                            enemy->transform.translation,
+                            world->player.transform.translation
+                        );
+                        if (dist < skill->cryonics.radius) {
+                            Effect effect = {
+                                .type = EFFECT_FREEZE,
+                                .freeze = {.time = skill->cryonics.duration}};
+                            if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
+                                enemy->effects[enemy->n_effects++] = effect;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -229,10 +263,6 @@ static void update_world(World *world) {
     for (int i = 0; i < world->n_skills; ++i) {
         Skill *skill = &world->skills[i];
         skill->time += dt;
-        if (skill->is_active && skill->time > skill->duration) {
-            skill->is_active = false;
-            skill->time = 0.0;
-        }
     }
 
     // -------------------------------------------------------------------
@@ -281,19 +311,41 @@ static void update_world(World *world) {
     }
 
     // -------------------------------------------------------------------
-    // update enemies action
+    // update enemies
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
+
+        // update enemy effects
+        bool can_move = true;
+        bool can_attack = true;
+
+        int n_active_effects = 0;
+        static Effect active_effects[MAX_N_ENEMY_EFFECTS];
+        for (int effect_i = 0; effect_i < enemy->n_effects; ++effect_i) {
+            Effect effect = enemy->effects[effect_i];
+            if (effect.type == EFFECT_FREEZE) {
+                effect.freeze.time -= dt;
+                if (effect.freeze.time > 0.0) {
+                    active_effects[n_active_effects++] = effect;
+                    can_move = false;
+                    can_attack = false;
+                }
+            }
+        }
+
+        enemy->n_effects = n_active_effects;
+        memcpy(enemy->effects, active_effects, sizeof(Effect) * n_active_effects);
+
+        // apply enemy movements and attacks
         Vector3 vec = Vector3Subtract(
             player->transform.translation, enemy->transform.translation
         );
-
-        if (Vector3Length(vec) > 2.0) {
+        if (can_move && Vector3Length(vec) > 2.0) {
             // move towards the player
             Vector3 dir = Vector3Normalize(vec);
             Vector3 step = Vector3Scale(dir, enemy->speed * dt);
             enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
-        } else {
+        } else if (can_attack) {
             // attack the player
         }
     }
@@ -341,7 +393,14 @@ static void draw_world(World *world) {
             DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
             for (int i = 0; i < world->n_enemies; ++i) {
                 Enemy enemy = world->enemies[i];
-                DrawSphere(enemy.transform.translation, 1.0, RED);
+
+                Color color = RED;
+                for (int effect_i = 0; effect_i < enemy.n_effects; ++effect_i) {
+                    Effect effect = enemy.effects[i];
+                    if (effect.type == EFFECT_FREEZE) color = BLUE;
+                }
+
+                DrawSphere(enemy.transform.translation, 1.0, color);
             }
             DrawCircle3D(
                 Vector3Zero(),
@@ -412,19 +471,13 @@ static void draw_world(World *world) {
                 float y = 8.0 + 1.8 * i * world->word_font.baseSize;
 
                 float ratio;
-                Color color;
-                if (skill->is_active) {
-                    ratio = fminf(1.0, 1.0 - skill->time / skill->duration);
-                    color = GREEN;
-                } else {
-                    ratio = fminf(1.0, skill->time / skill->cooldown);
-                    color = ColorFromNormalized((Vector4){
-                        .x = 1.0 - ratio,
-                        .y = ratio,
-                        .z = 0.0,
-                        .w = 1.0,
-                    });
-                }
+                ratio = fminf(1.0, skill->time / skill->cooldown);
+                Color color = ColorFromNormalized((Vector4){
+                    .x = 1.0 - ratio,
+                    .y = ratio,
+                    .z = 0.0,
+                    .w = 1.0,
+                });
                 float width = 190.0 * ratio;
                 draw_text(font, skill->name, (Vector2){8.0, y}, world->prompt);
                 Rectangle rec = {8.0, y + world->word_font.baseSize, width, 5.0};
