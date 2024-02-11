@@ -27,6 +27,7 @@
 
 typedef enum EffectType {
     EFFECT_FREEZE,
+    EFFECT_IMPULSE,
 } EffectType;
 
 typedef struct Effect {
@@ -35,25 +36,19 @@ typedef struct Effect {
         struct {
             float time;
         } freeze;
+
+        struct {
+            float speed;
+            float deceleration;
+            Vector3 direction;
+        } impulse;
     };
 } Effect;
-
-typedef struct Player {
-    Transform transform;
-} Player;
-
-typedef struct Enemy {
-    Transform transform;
-    float speed;
-    char name[MAX_WORD_LEN];
-
-    int n_effects;
-    Effect effects[MAX_N_ENEMY_EFFECTS];
-} Enemy;
 
 typedef enum SkillType {
     SKILL_PAUSE,
     SKILL_CRYONICS,
+    SKILL_REPULSE,
     N_SKILLS,
 } SkillType;
 
@@ -69,8 +64,27 @@ typedef struct Skill {
             float radius;
             float duration;
         } cryonics;
+
+        struct {
+            float radius;
+            float speed;
+            float deceleration;
+        } repulse;
     };
 } Skill;
+
+typedef struct Player {
+    Transform transform;
+} Player;
+
+typedef struct Enemy {
+    Transform transform;
+    float speed;
+    char name[MAX_WORD_LEN];
+
+    int n_effects;
+    Effect effects[MAX_N_ENEMY_EFFECTS];
+} Enemy;
 
 typedef enum WorldState {
     STATE_PLAYING,
@@ -145,12 +159,23 @@ static void init_world(World *world) {
 
     // cryonics skill
     memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 5.0;
+    skill.cooldown = 2.0;
     skill.time = 0.0;
     skill.type = SKILL_CRYONICS;
     skill.cryonics.duration = 2.0;
     skill.cryonics.radius = 10.0;
     strcpy(skill.name, "cryonics");
+    world->skills[world->n_skills++] = skill;
+
+    // repulse skill
+    memset(&skill, 0, sizeof(Skill));
+    skill.cooldown = 2.0;
+    skill.time = 0.0;
+    skill.type = SKILL_REPULSE;
+    skill.repulse.speed = 70.0;
+    skill.repulse.deceleration = 150.0;
+    skill.repulse.radius = 20.0;
+    strcpy(skill.name, "repulse");
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
@@ -250,6 +275,28 @@ static void update_world(World *world) {
                             }
                         }
                     }
+                } else if (skill->type == SKILL_REPULSE && world->state == STATE_PLAYING) {
+                    skill->time = 0.0;
+                    for (int i = 0; i < world->n_enemies; ++i) {
+                        Enemy *enemy = &world->enemies[i];
+                        Vector3 vec = Vector3Subtract(
+                            enemy->transform.translation,
+                            world->player.transform.translation
+                        );
+                        float dist = Vector3Length(vec);
+                        Vector3 dir = Vector3Normalize(vec);
+                        if (dist < skill->repulse.radius) {
+                            Effect effect = {
+                                .type = EFFECT_IMPULSE,
+                                .impulse = {
+                                    .speed = skill->repulse.speed,
+                                    .deceleration = skill->repulse.deceleration,
+                                    .direction = dir}};
+                            if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
+                                enemy->effects[enemy->n_effects++] = effect;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -318,18 +365,26 @@ static void update_world(World *world) {
         // update enemy effects
         bool can_move = true;
         bool can_attack = true;
+        Vector3 step = {0};
 
         int n_active_effects = 0;
         static Effect active_effects[MAX_N_ENEMY_EFFECTS];
         for (int effect_i = 0; effect_i < enemy->n_effects; ++effect_i) {
             Effect effect = enemy->effects[effect_i];
-            if (effect.type == EFFECT_FREEZE) {
+            if (effect.type == EFFECT_FREEZE && effect.freeze.time > 0) {
                 effect.freeze.time -= dt;
-                if (effect.freeze.time > 0.0) {
-                    active_effects[n_active_effects++] = effect;
-                    can_move = false;
-                    can_attack = false;
-                }
+                can_move = false;
+                can_attack = false;
+
+                active_effects[n_active_effects++] = effect;
+            } else if (effect.type == EFFECT_IMPULSE && effect.impulse.speed > 0.0) {
+                Vector3 dir = Vector3Normalize(effect.impulse.direction);
+                step = Vector3Scale(dir, effect.impulse.speed * dt);
+                effect.impulse.speed -= effect.impulse.deceleration * dt;
+                can_move = false;
+                can_attack = false;
+
+                active_effects[n_active_effects++] = effect;
             }
         }
 
@@ -337,6 +392,8 @@ static void update_world(World *world) {
         memcpy(enemy->effects, active_effects, sizeof(Effect) * n_active_effects);
 
         // apply enemy movements and attacks
+        enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
+
         Vector3 vec = Vector3Subtract(
             player->transform.translation, enemy->transform.translation
         );
@@ -396,8 +453,11 @@ static void draw_world(World *world) {
 
                 Color color = RED;
                 for (int effect_i = 0; effect_i < enemy.n_effects; ++effect_i) {
-                    Effect effect = enemy.effects[i];
-                    if (effect.type == EFFECT_FREEZE) color = BLUE;
+                    Effect effect = enemy.effects[effect_i];
+                    if (effect.type == EFFECT_FREEZE) {
+                        color = BLUE;
+                        break;
+                    }
                 }
 
                 DrawSphere(enemy.transform.translation, 1.0, color);
