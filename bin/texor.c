@@ -83,11 +83,17 @@ typedef struct Skill {
 
 typedef struct Player {
     Transform transform;
+    float max_health;
+    float health;
 } Player;
 
 typedef struct Enemy {
     Transform transform;
     float speed;
+    float attack_strength;
+    float attack_radius;
+    float attack_cooldown;
+    float recent_attack_time;
     char name[MAX_WORD_LEN];
 
     int n_effects;
@@ -97,6 +103,7 @@ typedef struct Enemy {
 typedef enum WorldState {
     STATE_PLAYING,
     STATE_PAUSE,
+    STATE_GAME_OVER,
 } WorldState;
 
 typedef struct World {
@@ -195,7 +202,7 @@ static void init_world(World *world) {
 
     // decay skill
     memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 2.0;
+    skill.cooldown = 5.0;
     skill.time = 0.0;
     skill.type = SKILL_DECAY;
     skill.decay.strength = 0.5;
@@ -218,6 +225,8 @@ static void init_world(World *world) {
     world->player.transform.rotation = QuaternionIdentity();
     world->player.transform.scale = Vector3One();
     world->player.transform.translation = Vector3Zero();
+    world->player.max_health = 100.0;
+    world->player.health = world->player.max_health;
 
     // -------------------------------------------------------------------
     // init camera
@@ -240,7 +249,6 @@ static void init_world(World *world) {
 static void update_world(World *world) {
     world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
     world->time += world->dt;
-    world->spawn_countdown -= world->dt;
 
     update_prompt(world);
     update_enemies_spawn(world);
@@ -267,6 +275,8 @@ static void update_prompt(World *world) {
 }
 
 static void update_enemies_spawn(World *world) {
+    world->spawn_countdown -= world->dt;
+
     if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
 
     world->spawn_countdown = fmaxf(BASE_SPAWN_PERIOD * expf(world->time * 0.001), 1.0);
@@ -284,6 +294,10 @@ static void update_enemies_spawn(World *world) {
             .scale = Vector3One(),
         },
         .speed = 5.0,
+        .attack_strength = 10.0,
+        .attack_radius = 2.0,
+        .attack_cooldown = 1.0,
+        .recent_attack_time = 0.0,
     };
 
     strcpy(enemy.name, world->enemy_names[rand() % world->n_enemy_names]);
@@ -406,17 +420,22 @@ static void update_enemies(World *world) {
 
         // apply enemy movements and attacks
         enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
-
-        Vector3 vec = Vector3Subtract(
+        Vector3 dir_to_player = Vector3Subtract(
             world->player.transform.translation, enemy->transform.translation
         );
-        if (can_move && Vector3Length(vec) > 2.0) {
-            // move towards the player
-            Vector3 dir = Vector3Normalize(vec);
-            Vector3 step = Vector3Scale(dir, enemy->speed * world->dt);
+        float dist_to_player = Vector3Length(dir_to_player);
+        dir_to_player = Vector3Normalize(dir_to_player);
+        float time_since_last_attack = world->time - enemy->recent_attack_time;
+        can_attack &= dist_to_player < enemy->attack_radius
+                      && time_since_last_attack > enemy->attack_cooldown;
+        can_move &= dist_to_player > enemy->attack_radius;
+
+        if (can_attack) {
+            enemy->recent_attack_time = world->time;
+            world->player.health -= enemy->attack_strength;
+        } else if (can_move) {
+            Vector3 step = Vector3Scale(dir_to_player, enemy->speed * world->dt);
             enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
-        } else if (can_attack) {
-            // attack the player
         }
     }
 
@@ -431,6 +450,12 @@ static void update_enemies(World *world) {
 }
 
 static void update_player(World *world) {
+    Player *player = &world->player;
+    if (player->health <= 0.0) {
+        world->state = STATE_GAME_OVER;
+        return;
+    }
+
     Vector2 dir = Vector2Zero();
     dir.y += IsKeyDown(KEY_UP);
     dir.y -= IsKeyDown(KEY_DOWN);
@@ -440,8 +465,8 @@ static void update_player(World *world) {
     int pressed_char = GetCharPressed();
     if (Vector2Length(dir) > EPSILON) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * world->dt);
-        world->player.transform.translation.x += step.x;
-        world->player.transform.translation.y += step.y;
+        player->transform.translation.x += step.x;
+        player->transform.translation.y += step.y;
     }
 }
 
@@ -561,11 +586,24 @@ static void draw_world(World *world) {
             DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
             DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
+            // draw player health
+            float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
+            Color color = ColorFromNormalized((Vector4){
+                .x = 1.0 - ratio,
+                .y = ratio,
+                .z = 0.0,
+                .w = 1.0,
+            });
+            rec = (Rectangle){8.0, 8.0, 190.0, 20.0};
+            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+            rec.width *= ratio;
+            DrawRectangleRounded(rec, 0.5, 16, color);
+
             // draw skills
             Font font = world->word_font;
             for (int i = 0; i < world->n_skills; ++i) {
                 Skill *skill = &world->skills[i];
-                float y = 8.0 + 1.8 * i * world->word_font.baseSize;
+                float y = 30.0 + 1.8 * i * world->word_font.baseSize;
 
                 float ratio;
                 ratio = fminf(1.0, skill->time / skill->cooldown);
