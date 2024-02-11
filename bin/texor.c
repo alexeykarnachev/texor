@@ -265,12 +265,15 @@ static void update_world(World *world, Resources *resources) {
     world->should_exit = (WindowShouldClose() || is_altf4_pressed)
                          && !IsKeyPressed(KEY_ESCAPE);
 
-    update_prompt(world);
-    update_enemies_spawn(world, resources);
     update_free_orbit_camera(&world->camera);
+    update_prompt(world);
     update_skills(world);
-    update_enemies(world);
-    update_player(world);
+
+    if (world->state == STATE_PLAYING) {
+        update_enemies_spawn(world, resources);
+        update_enemies(world);
+        update_player(world);
+    }
 
     world->submit_word[0] = '\0';
 }
