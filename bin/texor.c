@@ -165,6 +165,7 @@ static void update_world(World *world) {
 
     int prompt_len = strlen(WORLD.prompt);
     int pressed_char = GetCharPressed();
+    bool is_enter_prompt = IsKeyPressed(KEY_ENTER) && prompt_len > 0;
 
     Player *player = &world->player;
 
@@ -197,27 +198,6 @@ static void update_world(World *world) {
         player->transform.translation.y += step.y;
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
         WORLD.prompt[--prompt_len] = '\0';
-    } else if (IsKeyPressed(KEY_ENTER) && prompt_len > 0) {
-        // kill the enemy
-        int kill_enemy_idx = -1;
-        for (int i = 0; i < world->n_enemies; ++i) {
-            Enemy *enemy = &world->enemies[i];
-            if (strcmp(world->prompt, enemy->name) == 0) {
-                kill_enemy_idx = i;
-                break;
-            }
-        }
-
-        if (kill_enemy_idx >= 0) {
-            world->n_enemies -= 1;
-            memmove(
-                &world->enemies[kill_enemy_idx],
-                &world->enemies[kill_enemy_idx + 1],
-                sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
-            );
-        }
-
-        world->prompt[0] = '\0';
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         WORLD.prompt[prompt_len++] = pressed_char;
         WORLD.prompt[prompt_len] = '\0';
@@ -251,12 +231,17 @@ static void update_world(World *world) {
 
     // -------------------------------------------------------------------
     // update enemies action
+    int kill_enemy_idx = -1;
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
         Vector3 vec = Vector3Subtract(
             player->transform.translation, enemy->transform.translation
         );
-        if (Vector3Length(vec) > 2.0) {
+
+        if (is_enter_prompt && kill_enemy_idx == -1
+            && strcmp(world->prompt, enemy->name) == 0) {
+            kill_enemy_idx = i;
+        } else if (Vector3Length(vec) > 2.0) {
             // move towards the player
             Vector3 dir = Vector3Normalize(vec);
             Vector3 step = Vector3Scale(dir, enemy->speed * dt);
@@ -265,6 +250,19 @@ static void update_world(World *world) {
             // attack the player
         }
     }
+
+    if (kill_enemy_idx >= 0) {
+        world->n_enemies -= 1;
+        memmove(
+            &world->enemies[kill_enemy_idx],
+            &world->enemies[kill_enemy_idx + 1],
+            sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // reset prompt if enter pressed
+    if (is_enter_prompt) world->prompt[0] = '\0';
 }
 
 static void update_free_orbit_camera(Camera3D *camera) {
