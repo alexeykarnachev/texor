@@ -24,13 +24,6 @@
 #define UI_BACKGROUND_COLOR ((Color){20, 20, 20, 255})
 #define UI_OUTLINE_COLOR ((Color){0, 40, 0, 255})
 
-typedef struct Word {
-    Rectangle rec;
-    Vector2 text_pos;
-    char chars[MAX_WORD_LEN];
-    Color char_colors[MAX_WORD_LEN];
-} Word;
-
 typedef struct Player {
     Transform transform;
 } Player;
@@ -38,7 +31,7 @@ typedef struct Player {
 typedef struct Enemy {
     Transform transform;
     float speed;
-    Word word;
+    char name[MAX_WORD_LEN];
 } Enemy;
 
 typedef enum SkillType {
@@ -52,7 +45,8 @@ typedef struct Skill {
     float duration;
     float time;
     bool is_active;
-    Word word;
+    char name[MAX_WORD_LEN];
+
     SkillType type;
 } Skill;
 
@@ -65,7 +59,7 @@ typedef struct World {
     int n_enemies;
     Enemy enemies[MAX_N_ENEMIES];
 
-    char text_input[MAX_WORD_LEN];
+    char prompt[MAX_WORD_LEN];
 
     float time;
     float spawn_countdown;
@@ -84,7 +78,9 @@ static void init_world(World *world);
 static void update_world(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
 static void draw_world(World *world);
-static void draw_text(Font font, const char *text, Vector2 position, Color *colors);
+static void draw_text(
+    Font font, const char *text, Vector2 position, const char *match_prompt
+);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -117,7 +113,7 @@ static void init_world(World *world) {
     skill.duration = FLT_MAX;
     skill.time = 0.0;
     skill.type = SKILL_PAUSE;
-    strcpy(skill.word.chars, "pause");
+    strcpy(skill.name, "pause");
     world->skills[world->n_skills++] = skill;
 
     // dummy skill (for testing)
@@ -126,7 +122,7 @@ static void init_world(World *world) {
     skill.duration = FLT_MAX;
     skill.time = 0.0;
     skill.type = SKILL_TEST;
-    strcpy(skill.word.chars, "test_test_228");
+    strcpy(skill.name, "test_test_228");
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
@@ -167,7 +163,7 @@ static void update_world(World *world) {
     world->time += dt;
     world->spawn_countdown -= dt;
 
-    int text_input_len = strlen(WORLD.text_input);
+    int prompt_len = strlen(WORLD.prompt);
     int pressed_char = GetCharPressed();
 
     Player *player = &world->player;
@@ -188,49 +184,6 @@ static void update_world(World *world) {
     }
 
     // -------------------------------------------------------------------
-    // update enemy words
-    for (int i = 0; i < world->n_enemies; ++i) {
-        Enemy *enemy = &world->enemies[i];
-        Word *word = &enemy->word;
-
-        Vector2 screen_pos = GetWorldToScreen(
-            enemy->transform.translation, world->camera
-        );
-        Vector2 text_size = MeasureTextEx(
-            world->word_font, word->chars, world->word_font.baseSize, 0
-        );
-
-        Vector2 rec_size = Vector2Scale(text_size, 1.2);
-        Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
-        Vector2 rec_pos = Vector2Subtract(rec_center, Vector2Scale(rec_size, 0.5));
-
-        Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
-        Vector2 text_pos = {
-            rec_center.x - 0.5 * text_size.x,
-            rec_center.y - 0.5 * world->word_font.baseSize};
-
-        word->rec = rec;
-        word->text_pos = text_pos;
-        bool is_combo = true;
-        for (int i = 0; i < strlen(word->chars); ++i) {
-            char name_c = word->chars[i];
-            char text_input_c = world->text_input[i];
-            is_combo = text_input_c != '\0' && is_combo && name_c == text_input_c;
-
-            Color color;
-            if (is_combo) {
-                color = GREEN;
-            } else if (i < text_input_len) {
-                color = RED;
-            } else {
-                color = WHITE;
-            }
-
-            word->char_colors[i] = color;
-        }
-    }
-
-    // -------------------------------------------------------------------
     // update keyboard input
     Vector2 dir = Vector2Zero();
     dir.y += IsKeyDown(KEY_UP);
@@ -242,14 +195,14 @@ static void update_world(World *world) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * dt);
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
-    } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && text_input_len > 0) {
-        WORLD.text_input[--text_input_len] = '\0';
-    } else if (IsKeyPressed(KEY_ENTER) && text_input_len > 0) {
+    } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
+        WORLD.prompt[--prompt_len] = '\0';
+    } else if (IsKeyPressed(KEY_ENTER) && prompt_len > 0) {
         // kill the enemy
         int kill_enemy_idx = -1;
         for (int i = 0; i < world->n_enemies; ++i) {
             Enemy *enemy = &world->enemies[i];
-            if (strcmp(world->text_input, enemy->word.chars) == 0) {
+            if (strcmp(world->prompt, enemy->name) == 0) {
                 kill_enemy_idx = i;
                 break;
             }
@@ -264,10 +217,10 @@ static void update_world(World *world) {
             );
         }
 
-        world->text_input[0] = '\0';
-    } else if (text_input_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
-        WORLD.text_input[text_input_len++] = pressed_char;
-        WORLD.text_input[text_input_len] = '\0';
+        world->prompt[0] = '\0';
+    } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
+        WORLD.prompt[prompt_len++] = pressed_char;
+        WORLD.prompt[prompt_len] = '\0';
     }
 
     // -------------------------------------------------------------------
@@ -292,7 +245,7 @@ static void update_world(World *world) {
             .speed = 5.0,
         };
 
-        strcpy(enemy.word.chars, world->enemy_names[rand() % world->n_enemy_names]);
+        strcpy(enemy.name, world->enemy_names[rand() % world->n_enemy_names]);
         world->enemies[world->n_enemies++] = enemy;
     }
 
@@ -371,18 +324,37 @@ static void draw_world(World *world) {
         // draw enemy words
         {
             for (int i = 0; i < world->n_enemies; ++i) {
-                Word word = world->enemies[i].word;
-                DrawRectangleRounded(word.rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(world->word_font, word.chars, word.text_pos, word.char_colors);
+                Enemy enemy = world->enemies[i];
+
+                Vector2 screen_pos = GetWorldToScreen(
+                    enemy.transform.translation, world->camera
+                );
+                Vector2 text_size = MeasureTextEx(
+                    world->word_font, enemy.name, world->word_font.baseSize, 0
+                );
+
+                Vector2 rec_size = Vector2Scale(text_size, 1.2);
+                Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
+                Vector2 rec_pos = Vector2Subtract(
+                    rec_center, Vector2Scale(rec_size, 0.5)
+                );
+
+                Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
+                Vector2 text_pos = {
+                    rec_center.x - 0.5 * text_size.x,
+                    rec_center.y - 0.5 * world->word_font.baseSize};
+
+                DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
+                draw_text(world->word_font, enemy.name, text_pos, world->prompt);
             }
         }
 
-        // draw text input
+        // draw prompt
         {
             static char prompt[3] = {'>', ' ', '\0'};
             Font font = world->word_font;
             Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
-            Vector2 text_size = MeasureTextEx(font, world->text_input, font.baseSize, 0);
+            Vector2 text_size = MeasureTextEx(font, world->prompt, font.baseSize, 0);
             float y = GetScreenHeight() - font.baseSize - 5;
             DrawRectangle(
                 5.0 + prompt_size.x + text_size.x,
@@ -392,7 +364,7 @@ static void draw_world(World *world) {
                 WHITE
             );
             draw_text(font, prompt, (Vector2){5.0, y}, 0);
-            draw_text(font, world->text_input, (Vector2){prompt_size.x, y}, 0);
+            draw_text(font, world->prompt, (Vector2){prompt_size.x, y}, 0);
         }
 
         // draw in-game ui
@@ -405,7 +377,6 @@ static void draw_world(World *world) {
             Font font = world->word_font;
             for (int i = 0; i < world->n_skills; ++i) {
                 Skill *skill = &world->skills[i];
-                Word *word = &skill->word;
                 float y = 8.0 + 1.8 * i * world->word_font.baseSize;
 
                 float ratio;
@@ -423,7 +394,7 @@ static void draw_world(World *world) {
                     });
                 }
                 float width = 190.0 * ratio;
-                draw_text(font, word->chars, (Vector2){8.0, y}, 0);
+                draw_text(font, skill->name, (Vector2){8.0, y}, world->prompt);
                 Rectangle rec = {8.0, y + world->word_font.baseSize, width, 5.0};
                 DrawRectangleRec(rec, color);
             }
@@ -432,17 +403,28 @@ static void draw_world(World *world) {
     EndDrawing();
 }
 
-static void draw_text(Font font, const char *text, Vector2 position, Color *colors) {
+static void draw_text(
+    Font font, const char *text, Vector2 position, const char *match_prompt
+) {
     int n_chars = strlen(text);
     float offset = 0.0f;
     float scale = (float)font.baseSize / font.baseSize;
 
+    int prompt_len = match_prompt != 0 ? strlen(match_prompt) : 0;
+    bool is_combo = prompt_len > 0;
+
     for (int i = 0; i < n_chars; i++) {
         int ch = text[i];
-        int index = GetGlyphIndex(font, ch);
+        is_combo = is_combo && match_prompt[i] != '\0' && match_prompt[i] == ch;
+
         Color color;
-        if (colors) color = colors[i];
-        else color = WHITE;
+        if (is_combo) {
+            color = GREEN;
+        } else if (i < prompt_len) {
+            color = RED;
+        } else {
+            color = WHITE;
+        }
 
         if (ch != ' ') {
             DrawTextCodepoint(
@@ -450,6 +432,7 @@ static void draw_text(Font font, const char *text, Vector2 position, Color *colo
             );
         }
 
+        int index = GetGlyphIndex(font, ch);
         if (font.glyphs[index].advanceX == 0) {
             offset += ((float)font.recs[index].width * scale);
         } else {
