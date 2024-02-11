@@ -195,7 +195,7 @@ static void init_world(World *world) {
     // pause skill
     Skill skill = {0};
     skill.cooldown = 2.0;
-    skill.time = 0.0;
+    skill.time = skill.cooldown;
     skill.type = SKILL_PAUSE;
     strcpy(skill.name, "pause");
     world->skills[world->n_skills++] = skill;
@@ -203,19 +203,19 @@ static void init_world(World *world) {
     // cryonics skill
     memset(&skill, 0, sizeof(Skill));
     skill.cooldown = 2.0;
-    skill.time = 0.0;
+    skill.time = skill.cooldown;
     skill.type = SKILL_CRYONICS;
-    skill.cryonics.duration = 2.0;
-    skill.cryonics.radius = 10.0;
+    skill.cryonics.duration = 3.0;
+    skill.cryonics.radius = 30.0;
     strcpy(skill.name, "cryonics");
     world->skills[world->n_skills++] = skill;
 
     // repulse skill
     memset(&skill, 0, sizeof(Skill));
     skill.cooldown = 2.0;
-    skill.time = 0.0;
+    skill.time = skill.cooldown;
     skill.type = SKILL_REPULSE;
-    skill.repulse.speed = 70.0;
+    skill.repulse.speed = 60.0;
     skill.repulse.deceleration = 150.0;
     skill.repulse.radius = 20.0;
     strcpy(skill.name, "repulse");
@@ -224,11 +224,19 @@ static void init_world(World *world) {
     // decay skill
     memset(&skill, 0, sizeof(Skill));
     skill.cooldown = 5.0;
-    skill.time = 0.0;
+    skill.time = skill.cooldown;
     skill.type = SKILL_DECAY;
     skill.decay.strength = 0.5;
     skill.decay.radius = 20.0;
     strcpy(skill.name, "decay");
+    world->skills[world->n_skills++] = skill;
+
+    // exit skill
+    memset(&skill, 0, sizeof(Skill));
+    skill.cooldown = 0.0;
+    skill.time = skill.cooldown;
+    skill.type = SKILL_EXIT_GAME;
+    strcpy(skill.name, "exit");
     world->skills[world->n_skills++] = skill;
 
     // -------------------------------------------------------------------
@@ -312,7 +320,7 @@ static void update_enemies_spawn(World *world, Resources *resources) {
             .scale = Vector3One(),
         },
         .speed = 5.0,
-        .attack_strength = 100.0,
+        .attack_strength = 10.0,
         .attack_radius = 2.0,
         .attack_cooldown = 1.0,
         .recent_attack_time = 0.0,
