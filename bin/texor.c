@@ -320,7 +320,7 @@ static void update_enemies_spawn(World *world, Resources *resources) {
 
     world->spawn_countdown = fmaxf(BASE_SPAWN_PERIOD * expf(world->time * 0.001), 1.0);
 
-    float angle = ((float)rand() / RAND_MAX) * 2 * PI;
+    float angle = ((float)GetRandomValue(0, RAND_MAX) / RAND_MAX) * 2 * PI;
 
     Enemy enemy = {
         .transform={
@@ -339,7 +339,8 @@ static void update_enemies_spawn(World *world, Resources *resources) {
         .recent_attack_time = 0.0,
     };
 
-    strcpy(enemy.name, resources->enemy_names[rand() % resources->n_enemy_names]);
+    int idx = GetRandomValue(0, resources->n_enemy_names - 1);
+    strcpy(enemy.name, resources->enemy_names[idx]);
     world->enemies[world->n_enemies++] = enemy;
 }
 
