@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
@@ -18,8 +19,8 @@
 #define SCREEN_HEIGHT 768
 
 #define MAX_N_ENEMIES 256
-#define MAX_WORD_LEN 33
-#define MAX_N_ENEMY_NAMES 1000
+#define MAX_WORD_LEN 32
+#define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
 #define BASE_SPAWN_PERIOD 2.0
@@ -135,6 +136,9 @@ typedef struct Resources {
 
     int n_enemy_names;
     char enemy_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
+
+    int n_boss_names;
+    char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 } Resources;
 
 static Resources RESOURCES;
@@ -177,16 +181,25 @@ static void init_resources(Resources *resources) {
 
     // -------------------------------------------------------------------
     // init names
-    FILE *f = fopen("./resources/words/enemies.txt", "r");
+    FILE *f = fopen("./resources/words/enemy_names.txt", "r");
     while (fgets(resources->enemy_names[resources->n_enemy_names], MAX_WORD_LEN, f)) {
         char *name = resources->enemy_names[resources->n_enemy_names];
         name[strcspn(name, "\n")] = 0;
-        resources->n_enemy_names += 1;
+        if (++resources->n_enemy_names >= MAX_N_ENEMY_NAMES) break;
+    }
+    fclose(f);
+
+    f = fopen("./resources/words/boss_names.txt", "r");
+    while (fgets(resources->boss_names[resources->n_boss_names], MAX_WORD_LEN, f)) {
+        char *name = resources->boss_names[resources->n_boss_names];
+        name[strcspn(name, "\n")] = 0;
+        if (++resources->n_boss_names >= MAX_N_ENEMY_NAMES) break;
     }
     fclose(f);
 }
 
 static void init_world(World *world) {
+    SetRandomSeed(time(NULL));
     memset(world, 0, sizeof(World));
 
     // -------------------------------------------------------------------
