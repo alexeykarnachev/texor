@@ -23,7 +23,11 @@
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
-#define BASE_SPAWN_PERIOD 2.0
+#define DIFFICULTY 1.0
+#define BASE_SPAWN_PERIOD 5.0
+#define BASE_ENEMY_SPEED_FACTOR 0.5
+#define MAX_ENEMY_SPEED_FACTOR 1.5
+#define PLAYER_SPEED 6.0
 
 #define UI_BACKGROUND_COLOR ((Color){20, 20, 20, 255})
 #define UI_OUTLINE_COLOR ((Color){0, 40, 0, 255})
@@ -127,6 +131,7 @@ typedef struct World {
     float time;
     float spawn_countdown;
     float spawn_radius;
+    Vector3 spawn_position;
     Camera3D camera;
     WorldState state;
 } World;
@@ -146,6 +151,7 @@ static World WORLD;
 
 static void init_resources(Resources *resources);
 static void init_world(World *world);
+static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
 static void update_enemies_spawn(World *world, Resources *resources);
@@ -276,6 +282,16 @@ static void init_world(World *world) {
     // init game parameters
     world->state = STATE_PLAYING;
     world->spawn_radius = 28.0;
+    init_spawn_position(world);
+}
+
+static void init_spawn_position(World *world) {
+    float angle = ((float)GetRandomValue(0, RAND_MAX) / RAND_MAX) * 2 * PI;
+    world->spawn_position = (Vector3){
+        .x = world->spawn_radius * cos(angle),
+        .y = world->spawn_radius * sin(angle),
+        .z = 0.0,
+    };
 }
 
 static void update_world(World *world, Resources *resources) {
@@ -318,21 +334,32 @@ static void update_enemies_spawn(World *world, Resources *resources) {
 
     if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
 
-    world->spawn_countdown = fmaxf(BASE_SPAWN_PERIOD * expf(world->time * 0.001), 1.0);
+    // https://www.desmos.com/calculator/jp6dgyycwn
+    world->spawn_countdown = fmaxf(
+        BASE_SPAWN_PERIOD * expf(-world->time * 0.001 * DIFFICULTY), 1.0
+    );
+    float speed_factor = BASE_ENEMY_SPEED_FACTOR
+                         + (MAX_ENEMY_SPEED_FACTOR - BASE_ENEMY_SPEED_FACTOR)
+                               * (1.0 - expf(-world->time * 0.001 * DIFFICULTY));
+    float speed = PLAYER_SPEED * speed_factor;
 
-    float angle = ((float)GetRandomValue(0, RAND_MAX) / RAND_MAX) * 2 * PI;
+    TraceLog(
+        LOG_INFO,
+        "\nspawn countdown -> %.3f\nspeed factor-> %.3f",
+        world->spawn_countdown,
+        speed_factor
+    );
+
+    Vector3 position = world->spawn_position;
+    init_spawn_position(world);
 
     Enemy enemy = {
         .transform={
-            .translation = {
-                .x = world->spawn_radius * cos(angle),
-                .y = world->spawn_radius * sin(angle),
-                .z = 0.0,
-            },
+            .translation = position,
             .rotation = QuaternionIdentity(),
             .scale = Vector3One(),
         },
-        .speed = 5.0,
+        .speed = speed,
         .attack_strength = 10.0,
         .attack_radius = 2.0,
         .attack_cooldown = 1.0,
@@ -520,7 +547,7 @@ static void update_player(World *world) {
 
     int pressed_char = GetCharPressed();
     if (Vector2Length(dir) > EPSILON) {
-        Vector2 step = Vector2Scale(Vector2Normalize(dir), 20.0 * world->dt);
+        Vector2 step = Vector2Scale(Vector2Normalize(dir), PLAYER_SPEED * world->dt);
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
     }
@@ -565,7 +592,11 @@ static void draw_world(World *world, Resources *resources) {
         BeginMode3D(world->camera);
         {
             ClearBackground(BLANK);
+
+            // draw player
             DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
+
+            // draw enemies
             for (int i = 0; i < world->n_enemies; ++i) {
                 Enemy enemy = world->enemies[i];
 
@@ -580,6 +611,12 @@ static void draw_world(World *world, Resources *resources) {
 
                 DrawSphere(enemy.transform.translation, 1.0, color);
             }
+
+            // draw next spawn enemy ghost
+            float alpha = 1.0 - world->spawn_countdown / BASE_SPAWN_PERIOD;
+            DrawSphere(world->spawn_position, 1.0, ColorAlpha(RED, alpha));
+
+            // draw arena boundary
             DrawCircle3D(
                 Vector3Zero(),
                 world->spawn_radius,
