@@ -18,15 +18,16 @@
 #define SCREEN_WIDTH 1024
 #define SCREEN_HEIGHT 768
 
-#define MAX_N_ENEMIES 256
+#define MAX_N_ENEMIES 32
 #define MAX_WORD_LEN 32
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
-#define DIFFICULTY 5.0
+#define DIFFICULTY 6.0
 #define BASE_SPAWN_PERIOD 5.0
-#define BASE_ENEMY_SPEED_FACTOR 0.5
-#define MAX_ENEMY_SPEED_FACTOR 1.5
+#define BASE_ENEMY_SPEED_FACTOR 0.3
+#define MAX_ENEMY_SPEED_FACTOR 1.1
+#define BOSS_SPAWN_PERIOD 10  // in number of enemies
 #define PLAYER_SPEED 6.0
 
 // puase
@@ -132,6 +133,7 @@ typedef struct World {
     int n_commands;
     Command commands[N_COMMANDS];
 
+    int n_enemies_spawned; // in total
     int n_enemies;
     Enemy enemies[MAX_N_ENEMIES];
 
@@ -381,8 +383,13 @@ static void update_enemies_spawn(World *world, Resources *resources) {
         .recent_attack_time = 0.0,
     };
 
-    int idx = GetRandomValue(0, resources->n_enemy_names - 1);
-    strcpy(enemy.name, resources->enemy_names[idx]);
+    if (++world->n_enemies_spawned % BOSS_SPAWN_PERIOD == 0) {
+        int idx = GetRandomValue(0, resources->n_boss_names - 1);
+        strcpy(enemy.name, resources->boss_names[idx]);
+    } else {
+        int idx = GetRandomValue(0, resources->n_enemy_names - 1);
+        strcpy(enemy.name, resources->enemy_names[idx]);
+    }
     world->enemies[world->n_enemies++] = enemy;
 }
 
