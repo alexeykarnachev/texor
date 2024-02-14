@@ -23,11 +23,25 @@
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
-#define DIFFICULTY 1.0
+#define DIFFICULTY 5.0
 #define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.5
 #define MAX_ENEMY_SPEED_FACTOR 1.5
 #define PLAYER_SPEED 6.0
+
+// puase
+#define PAUSE_COOLDOWN 5.0
+// cryonics
+#define CRYONICS_COOLDOWN 40.0
+#define CRYONICS_DURATION 10.0
+// repulse
+#define REPULSE_COOLDOWN 20.0
+#define REPULSE_SPEED 80.0
+#define REPULSE_DECELERATION 150.0
+#define REPULSE_RADIUS 30.0
+// decay
+#define DECAY_COOLDOWN 20.0
+#define DECAY_STRENGTH 0.5
 
 #define UI_BACKGROUND_COLOR ((Color){20, 20, 20, 255})
 #define UI_OUTLINE_COLOR ((Color){0, 40, 0, 255})
@@ -52,27 +66,26 @@ typedef struct Effect {
     };
 } Effect;
 
-typedef enum SkillType {
-    SKILL_PAUSE,
-    SKILL_CRYONICS,
-    SKILL_REPULSE,
-    SKILL_DECAY,
+typedef enum CommandType {
+    COMMAND_PAUSE,
+    COMMAND_CRYONICS,
+    COMMAND_REPULSE,
+    COMMAND_DECAY,
 
-    SKILL_RESTART_GAME,
-    SKILL_EXIT_GAME,
-    N_SKILLS,
-} SkillType;
+    COMMAND_RESTART_GAME,
+    COMMAND_EXIT_GAME,
+    N_COMMANDS,
+} CommandType;
 
-typedef struct Skill {
+typedef struct Command {
     float cooldown;
     float time;
     char name[MAX_WORD_LEN];
 
-    SkillType type;
+    CommandType type;
 
     union {
         struct {
-            float radius;
             float duration;
         } cryonics;
 
@@ -83,11 +96,10 @@ typedef struct Skill {
         } repulse;
 
         struct {
-            float radius;
             float strength;
         } decay;
     };
-} Skill;
+} Command;
 
 typedef struct Player {
     Transform transform;
@@ -117,8 +129,8 @@ typedef enum WorldState {
 typedef struct World {
     Player player;
 
-    int n_skills;
-    Skill skills[N_SKILLS];
+    int n_commands;
+    Command commands[N_COMMANDS];
 
     int n_enemies;
     Enemy enemies[MAX_N_ENEMIES];
@@ -129,6 +141,7 @@ typedef struct World {
     bool should_exit;
     float dt;
     float time;
+    float freeze_time;
     float spawn_countdown;
     float spawn_radius;
     Vector3 spawn_position;
@@ -155,7 +168,7 @@ static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
 static void update_enemies_spawn(World *world, Resources *resources);
-static void update_skills(World *world);
+static void update_commands(World *world);
 static void update_enemies(World *world);
 static void update_player(World *world);
 static void update_free_orbit_camera(Camera3D *camera);
@@ -209,54 +222,52 @@ static void init_world(World *world) {
     memset(world, 0, sizeof(World));
 
     // -------------------------------------------------------------------
-    // init skills
+    // init commands
 
-    // pause skill
-    Skill skill = {0};
-    skill.cooldown = 2.0;
-    skill.time = skill.cooldown;
-    skill.type = SKILL_PAUSE;
-    strcpy(skill.name, "pause");
-    world->skills[world->n_skills++] = skill;
+    // pause command
+    Command command = {0};
+    command.cooldown = PAUSE_COOLDOWN;
+    command.time = command.cooldown;
+    command.type = COMMAND_PAUSE;
+    strcpy(command.name, "pause");
+    world->commands[world->n_commands++] = command;
 
-    // cryonics skill
-    memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 2.0;
-    skill.time = skill.cooldown;
-    skill.type = SKILL_CRYONICS;
-    skill.cryonics.duration = 3.0;
-    skill.cryonics.radius = 30.0;
-    strcpy(skill.name, "cryonics");
-    world->skills[world->n_skills++] = skill;
+    // cryonics command
+    memset(&command, 0, sizeof(Command));
+    command.cooldown = CRYONICS_COOLDOWN;
+    command.time = command.cooldown;
+    command.type = COMMAND_CRYONICS;
+    command.cryonics.duration = CRYONICS_DURATION;
+    strcpy(command.name, "cryonics");
+    world->commands[world->n_commands++] = command;
 
-    // repulse skill
-    memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 2.0;
-    skill.time = skill.cooldown;
-    skill.type = SKILL_REPULSE;
-    skill.repulse.speed = 60.0;
-    skill.repulse.deceleration = 150.0;
-    skill.repulse.radius = 20.0;
-    strcpy(skill.name, "repulse");
-    world->skills[world->n_skills++] = skill;
+    // repulse command
+    memset(&command, 0, sizeof(Command));
+    command.cooldown = REPULSE_COOLDOWN;
+    command.time = command.cooldown;
+    command.type = COMMAND_REPULSE;
+    command.repulse.speed = REPULSE_SPEED;
+    command.repulse.deceleration = REPULSE_DECELERATION;
+    command.repulse.radius = REPULSE_RADIUS;
+    strcpy(command.name, "repulse");
+    world->commands[world->n_commands++] = command;
 
-    // decay skill
-    memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 5.0;
-    skill.time = skill.cooldown;
-    skill.type = SKILL_DECAY;
-    skill.decay.strength = 0.5;
-    skill.decay.radius = 20.0;
-    strcpy(skill.name, "decay");
-    world->skills[world->n_skills++] = skill;
+    // decay command
+    memset(&command, 0, sizeof(Command));
+    command.cooldown = DECAY_COOLDOWN;
+    command.time = command.cooldown;
+    command.type = COMMAND_DECAY;
+    command.decay.strength = DECAY_STRENGTH;
+    strcpy(command.name, "decay");
+    world->commands[world->n_commands++] = command;
 
-    // exit skill
-    memset(&skill, 0, sizeof(Skill));
-    skill.cooldown = 0.0;
-    skill.time = skill.cooldown;
-    skill.type = SKILL_EXIT_GAME;
-    strcpy(skill.name, "exit");
-    world->skills[world->n_skills++] = skill;
+    // exit command
+    memset(&command, 0, sizeof(Command));
+    command.cooldown = 0.0;
+    command.time = command.cooldown;
+    command.type = COMMAND_EXIT_GAME;
+    strcpy(command.name, "exit");
+    world->commands[world->n_commands++] = command;
 
     // -------------------------------------------------------------------
     // init player
@@ -296,6 +307,7 @@ static void init_spawn_position(World *world) {
 
 static void update_world(World *world, Resources *resources) {
     world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
+    world->freeze_time = fmaxf(0.0, world->freeze_time - world->dt);
     world->time += world->dt;
 
     bool is_altf4_pressed = IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_F4);
@@ -304,7 +316,7 @@ static void update_world(World *world, Resources *resources) {
 
     update_free_orbit_camera(&world->camera);
     update_prompt(world);
-    update_skills(world);
+    update_commands(world);
 
     if (world->state == STATE_PLAYING) {
         update_enemies_spawn(world, resources);
@@ -330,7 +342,10 @@ static void update_prompt(World *world) {
 }
 
 static void update_enemies_spawn(World *world, Resources *resources) {
-    world->spawn_countdown -= world->dt;
+    // don't update spawn_countdown if the world is frozen
+    if (world->freeze_time < EPSILON) {
+        world->spawn_countdown -= world->dt;
+    }
 
     if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
 
@@ -371,47 +386,43 @@ static void update_enemies_spawn(World *world, Resources *resources) {
     world->enemies[world->n_enemies++] = enemy;
 }
 
-static void update_skills(World *world) {
+static void update_commands(World *world) {
     float dt = world->dt;
     const char *submit_word = world->submit_word;
 
-    for (int i = 0; i < world->n_skills; ++i) {
-        Skill *skill = &world->skills[i];
-        skill->time += dt;
+    for (int i = 0; i < world->n_commands; ++i) {
+        Command *command = &world->commands[i];
+        command->time += dt;
 
-        bool is_match = strcmp(submit_word, skill->name) == 0;
-        bool is_ready = skill->time > skill->cooldown;
+        bool is_match = strcmp(submit_word, command->name) == 0;
+        bool is_ready = command->time > command->cooldown;
         if (is_match && is_ready) {
-            if (skill->type == SKILL_PAUSE && world->state == STATE_PLAYING) {
-                skill->time = skill->cooldown + 1.0;
-                strcpy(skill->name, "continue");
+            if (command->type == COMMAND_PAUSE && world->state == STATE_PLAYING) {
+                command->time = command->cooldown + 1.0;
+                strcpy(command->name, "continue");
                 world->state = STATE_PAUSE;
-            } else if (skill->type == SKILL_PAUSE && world->state == STATE_PAUSE) {
-                skill->time = 0.0;
-                strcpy(skill->name, "pause");
+            } else if (command->type == COMMAND_PAUSE && world->state == STATE_PAUSE) {
+                command->time = 0.0;
+                strcpy(command->name, "pause");
                 world->state = STATE_PLAYING;
-            } else if (skill->type == SKILL_RESTART_GAME) {
+            } else if (command->type == COMMAND_RESTART_GAME) {
                 init_world(world);
-            } else if (skill->type == SKILL_EXIT_GAME) {
+            } else if (command->type == COMMAND_EXIT_GAME) {
                 world->should_exit = true;
-            } else if (skill->type == SKILL_CRYONICS && world->state == STATE_PLAYING) {
-                skill->time = 0.0;
+            } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING) {
+                world->freeze_time = command->cryonics.duration;
+                command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
                     Enemy *enemy = &world->enemies[i];
-                    float dist = Vector3Distance(
-                        enemy->transform.translation, world->player.transform.translation
-                    );
-                    if (dist < skill->cryonics.radius) {
-                        Effect effect = {
-                            .type = EFFECT_FREEZE,
-                            .freeze = {.time = skill->cryonics.duration}};
-                        if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
-                            enemy->effects[enemy->n_effects++] = effect;
-                        }
+                    Effect effect = {
+                        .type = EFFECT_FREEZE,
+                        .freeze = {.time = command->cryonics.duration}};
+                    if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
+                        enemy->effects[enemy->n_effects++] = effect;
                     }
                 }
-            } else if (skill->type == SKILL_REPULSE && world->state == STATE_PLAYING) {
-                skill->time = 0.0;
+            } else if (command->type == COMMAND_REPULSE && world->state == STATE_PLAYING) {
+                command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
                     Enemy *enemy = &world->enemies[i];
                     Vector3 vec = Vector3Subtract(
@@ -419,29 +430,24 @@ static void update_skills(World *world) {
                     );
                     float dist = Vector3Length(vec);
                     Vector3 dir = Vector3Normalize(vec);
-                    if (dist < skill->repulse.radius) {
+                    if (dist < command->repulse.radius) {
                         Effect effect = {
                             .type = EFFECT_IMPULSE,
                             .impulse = {
-                                .speed = skill->repulse.speed,
-                                .deceleration = skill->repulse.deceleration,
+                                .speed = command->repulse.speed,
+                                .deceleration = command->repulse.deceleration,
                                 .direction = dir}};
                         if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
                             enemy->effects[enemy->n_effects++] = effect;
                         }
                     }
                 }
-            } else if (skill->type == SKILL_DECAY && world->state == STATE_PLAYING) {
-                skill->time = 0.0;
+            } else if (command->type == COMMAND_DECAY && world->state == STATE_PLAYING) {
+                command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
                     Enemy *enemy = &world->enemies[i];
-                    float dist = Vector3Distance(
-                        enemy->transform.translation, world->player.transform.translation
-                    );
-                    if (dist < skill->cryonics.radius) {
-                        int len = max(1, strlen(enemy->name) / 2);
-                        enemy->name[len] = '\0';
-                    }
+                    int len = max(1, strlen(enemy->name) / 2);
+                    enemy->name[len] = '\0';
                 }
             }
         }
@@ -525,17 +531,17 @@ static void update_player(World *world) {
     if (player->health <= 0.0) {
         world->state = STATE_GAME_OVER;
 
-        Skill *skill = &world->skills[0];
-        skill->type = SKILL_RESTART_GAME;
-        skill->cooldown = 0.0;
-        strcpy(skill->name, "restart");
+        Command *command = &world->commands[0];
+        command->type = COMMAND_RESTART_GAME;
+        command->cooldown = 0.0;
+        strcpy(command->name, "restart");
 
-        skill = &world->skills[1];
-        skill->type = SKILL_EXIT_GAME;
-        skill->cooldown = 0.0;
-        strcpy(skill->name, "exit");
+        command = &world->commands[1];
+        command->type = COMMAND_EXIT_GAME;
+        command->cooldown = 0.0;
+        strcpy(command->name, "exit");
 
-        world->n_skills = 2;
+        world->n_commands = 2;
         return;
     }
 
@@ -692,13 +698,13 @@ static void draw_world(World *world, Resources *resources) {
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
 
-            // draw skills
-            for (int i = 0; i < world->n_skills; ++i) {
-                Skill *skill = &world->skills[i];
+            // draw commands
+            for (int i = 0; i < world->n_commands; ++i) {
+                Command *command = &world->commands[i];
                 float y = 40.0 + 1.8 * i * resources->word_font.baseSize;
 
                 float ratio;
-                ratio = fminf(1.0, skill->time / skill->cooldown);
+                ratio = fminf(1.0, command->time / command->cooldown);
                 Color color = ColorFromNormalized((Vector4){
                     .x = 1.0 - ratio,
                     .y = ratio,
@@ -707,7 +713,7 @@ static void draw_world(World *world, Resources *resources) {
                 });
                 float width = 190.0 * ratio;
                 draw_text(
-                    resources->word_font, skill->name, (Vector2){8.0, y}, world->prompt
+                    resources->word_font, command->name, (Vector2){8.0, y}, world->prompt
                 );
                 Rectangle rec = {8.0, y + resources->word_font.baseSize, width, 5.0};
                 DrawRectangleRec(rec, color);
