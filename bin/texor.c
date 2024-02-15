@@ -28,7 +28,7 @@
 #define BASE_ENEMY_SPEED_FACTOR 0.3
 #define MAX_ENEMY_SPEED_FACTOR 1.1
 #define BOSS_SPAWN_PERIOD 10  // in number of enemies
-#define PLAYER_SPEED 6.0
+#define PLAYER_SPEED 20.0
 #define PLAYER_MAX_HEALTH 100.0
 #define BACKSPACE_DAMAGE 1.0
 #define WRONG_COMMAND_DAMAGE 10.0
@@ -71,13 +71,15 @@ typedef struct Effect {
 } Effect;
 
 typedef enum CommandType {
+    COMMAND_START_GAME,
+    COMMAND_EXIT_GAME,
+
     COMMAND_PAUSE,
     COMMAND_CRYONICS,
     COMMAND_REPULSE,
     COMMAND_DECAY,
 
     COMMAND_RESTART_GAME,
-    COMMAND_EXIT_GAME,
     N_COMMANDS,
 } CommandType;
 
@@ -128,6 +130,7 @@ typedef struct Enemy {
 } Enemy;
 
 typedef enum WorldState {
+    STATE_MENU,
     STATE_PLAYING,
     STATE_PAUSE,
     STATE_GAME_OVER,
@@ -176,6 +179,7 @@ static World WORLD;
 
 static void init_resources(Resources *resources);
 static void init_world(World *world);
+static void init_menu_commands(World *world);
 static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
@@ -239,6 +243,59 @@ static void init_world(World *world) {
 
     // -------------------------------------------------------------------
     // init commands
+    init_menu_commands(world);
+
+    // -------------------------------------------------------------------
+    // init player
+    world->player.transform.rotation = QuaternionIdentity();
+    world->player.transform.scale = Vector3One();
+    world->player.transform.translation = Vector3Zero();
+    world->player.max_health = PLAYER_MAX_HEALTH;
+    world->player.health = world->player.max_health;
+
+    // -------------------------------------------------------------------
+    // init camera
+    Vector3 player_position = world->player.transform.translation;
+    world->camera.fovy = 60.0;
+    world->camera.position = player_position;
+    world->camera.position.z = 70.0;
+    world->camera.position.x -= 10.0;
+    world->camera.target = world->camera.position;
+    world->camera.target.z -= 1.0;
+    world->camera.up = (Vector3){0.0, 1.0, 0.0};
+    world->camera.projection = CAMERA_PERSPECTIVE;
+
+    // -------------------------------------------------------------------
+    // init game parameters
+    world->state = STATE_MENU;
+    // world->state = STATE_PLAYING;
+    world->spawn_radius = 28.0;
+    init_spawn_position(world);
+}
+
+static void init_menu_commands(World *world) {
+    world->n_commands = 0;
+
+    // start command
+    Command command = {0};
+    memset(&command, 0, sizeof(Command));
+    command.cooldown = 0.0;
+    command.time = command.cooldown;
+    command.type = COMMAND_START_GAME;
+    strcpy(command.name, "start");
+    world->commands[world->n_commands++] = command;
+
+    // exit command
+    memset(&command, 0, sizeof(Command));
+    command.cooldown = 0.0;
+    command.time = command.cooldown;
+    command.type = COMMAND_EXIT_GAME;
+    strcpy(command.name, "exit");
+    world->commands[world->n_commands++] = command;
+}
+
+static void init_playing_commands(World *world) {
+    world->n_commands = 0;
 
     // pause command
     Command command = {0};
@@ -284,32 +341,6 @@ static void init_world(World *world) {
     command.type = COMMAND_EXIT_GAME;
     strcpy(command.name, "exit");
     world->commands[world->n_commands++] = command;
-
-    // -------------------------------------------------------------------
-    // init player
-    world->player.transform.rotation = QuaternionIdentity();
-    world->player.transform.scale = Vector3One();
-    world->player.transform.translation = Vector3Zero();
-    world->player.max_health = PLAYER_MAX_HEALTH;
-    world->player.health = world->player.max_health;
-
-    // -------------------------------------------------------------------
-    // init camera
-    Vector3 player_position = world->player.transform.translation;
-    world->camera.fovy = 60.0;
-    world->camera.position = player_position;
-    world->camera.position.z = 50.0;
-    world->camera.position.x -= 10.0;
-    world->camera.target = world->camera.position;
-    world->camera.target.z -= 1.0;
-    world->camera.up = (Vector3){0.0, 1.0, 0.0};
-    world->camera.projection = CAMERA_PERSPECTIVE;
-
-    // -------------------------------------------------------------------
-    // init game parameters
-    world->state = STATE_PLAYING;
-    world->spawn_radius = 28.0;
-    init_spawn_position(world);
 }
 
 static void init_spawn_position(World *world) {
@@ -322,30 +353,21 @@ static void init_spawn_position(World *world) {
 }
 
 static void update_world(World *world, Resources *resources) {
-    world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
-    world->freeze_time = fmaxf(0.0, world->freeze_time - world->dt);
-    world->time += world->dt;
-    world->is_command_matched = false;
-
     bool is_altf4_pressed = IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_F4);
     world->should_exit = (WindowShouldClose() || is_altf4_pressed)
                          && !IsKeyPressed(KEY_ESCAPE);
 
-    update_free_orbit_camera(&world->camera);
+    world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
+    world->time += world->dt;
+    world->freeze_time = fmaxf(0.0, world->freeze_time - world->dt);
+    world->is_command_matched = false;
+
     update_prompt(world);
     update_commands(world);
-
-    if (world->state == STATE_PLAYING) {
-        update_enemies_spawn(world, resources);
-        update_enemies(world);
-        update_player(world);
-    }
-
-    // damage player if submitted command doesn't exist
-    if (world->submit_word[0] != '\0' && !world->is_command_matched) {
-        world->player.health -= WRONG_COMMAND_DAMAGE;
-        world->player.health = fmaxf(0.0, world->player.health);
-    }
+    update_free_orbit_camera(&world->camera);
+    update_enemies_spawn(world, resources);
+    update_enemies(world);
+    update_player(world);
 
     world->submit_word[0] = '\0';
 }
@@ -357,7 +379,6 @@ static void update_prompt(World *world) {
         strcpy(world->submit_word, world->prompt);
         world->prompt[0] = '\0';
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
-        world->player.health -= BACKSPACE_DAMAGE;
         world->prompt[--prompt_len] = '\0';
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         world->prompt[prompt_len++] = pressed_char;
@@ -366,6 +387,8 @@ static void update_prompt(World *world) {
 }
 
 static void update_enemies_spawn(World *world, Resources *resources) {
+    if (world->state != STATE_PLAYING) return;
+
     // don't update spawn_countdown if the world is frozen
     if (world->freeze_time < EPSILON) {
         if (world->n_enemies == 0) {
@@ -428,11 +451,16 @@ static void update_commands(World *world) {
         Command *command = &world->commands[i];
         command->time += dt;
 
-        bool is_ready = command->time > command->cooldown;
+        bool is_ready = command->time >= command->cooldown;
         bool is_command_matched = strcmp(submit_word, command->name) == 0;
         world->is_command_matched |= is_command_matched;
         if (is_command_matched && is_ready) {
-            if (command->type == COMMAND_PAUSE && world->state == STATE_PLAYING) {
+            if (command->type == COMMAND_EXIT_GAME) {
+                world->should_exit = true;
+            } else if (command->type == COMMAND_START_GAME) {
+                world->state = STATE_PLAYING;
+                init_playing_commands(world);
+            } else if (command->type == COMMAND_PAUSE && world->state == STATE_PLAYING) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "continue");
                 world->state = STATE_PAUSE;
@@ -442,8 +470,8 @@ static void update_commands(World *world) {
                 world->state = STATE_PLAYING;
             } else if (command->type == COMMAND_RESTART_GAME) {
                 init_world(world);
-            } else if (command->type == COMMAND_EXIT_GAME) {
-                world->should_exit = true;
+                world->state = STATE_PLAYING;
+                init_playing_commands(world);
             } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING) {
                 world->freeze_time = command->cryonics.duration;
                 command->time = 0.0;
@@ -490,6 +518,8 @@ static void update_commands(World *world) {
 }
 
 static void update_enemies(World *world) {
+    if (world->state != STATE_PLAYING) return;
+
     const char *submit_word = world->submit_word;
     int kill_enemy_idx = -1;
 
@@ -607,6 +637,23 @@ static void update_player(World *world) {
         player->transform.translation.x += step.x;
         player->transform.translation.y += step.y;
     }
+
+    if (world->state == STATE_PLAYING) {
+        // damage player if submitted command doesn't exist
+        if (world->submit_word[0] != '\0' && !world->is_command_matched) {
+            world->player.health -= WRONG_COMMAND_DAMAGE;
+        }
+
+        // damage player if backspace is pressed
+        int prompt_len = strlen(world->prompt);
+        if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE))
+            && prompt_len > 0) {
+            world->player.health -= BACKSPACE_DAMAGE;
+            world->prompt[--prompt_len] = '\0';
+        }
+    }
+
+    world->player.health = fmaxf(0.0, world->player.health);
 }
 
 static void update_free_orbit_camera(Camera3D *camera) {
@@ -643,172 +690,160 @@ static void update_free_orbit_camera(Camera3D *camera) {
 
 static void draw_world(World *world, Resources *resources) {
     BeginDrawing();
-    {
-        // scene
+    ClearBackground(BLANK);
+
+    // scene
+    if (world->state > STATE_MENU) {
         BeginMode3D(world->camera);
-        {
-            ClearBackground(BLANK);
 
-            // draw player
-            DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
+        // draw player
+        DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
 
-            // draw enemies
-            for (int i = 0; i < world->n_enemies; ++i) {
-                Enemy enemy = world->enemies[i];
+        // draw enemies
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy enemy = world->enemies[i];
 
-                Color color = RED;
-                for (int effect_i = 0; effect_i < enemy.n_effects; ++effect_i) {
-                    Effect effect = enemy.effects[effect_i];
-                    if (effect.type == EFFECT_FREEZE) {
-                        color = BLUE;
-                        break;
-                    }
+            Color color = RED;
+            for (int effect_i = 0; effect_i < enemy.n_effects; ++effect_i) {
+                Effect effect = enemy.effects[effect_i];
+                if (effect.type == EFFECT_FREEZE) {
+                    color = BLUE;
+                    break;
                 }
-
-                DrawSphere(enemy.transform.translation, 1.0, color);
             }
 
-            // draw next spawn enemy ghost
-            float alpha = 1.0 - world->spawn_countdown / BASE_SPAWN_PERIOD;
-            DrawSphere(world->spawn_position, 1.0, ColorAlpha(RED, alpha));
-
-            // draw arena boundary
-            DrawCircle3D(
-                Vector3Zero(),
-                world->spawn_radius,
-                (Vector3){0.0, 0.0, 1.0},
-                0.0,
-                UI_OUTLINE_COLOR
-            );
+            DrawSphere(enemy.transform.translation, 1.0, color);
         }
+
+        // draw next spawn enemy ghost
+        float alpha = 1.0 - world->spawn_countdown / BASE_SPAWN_PERIOD;
+        DrawSphere(world->spawn_position, 1.0, ColorAlpha(RED, alpha));
+
+        // draw arena boundary
+        DrawCircle3D(
+            Vector3Zero(),
+            world->spawn_radius,
+            (Vector3){0.0, 0.0, 1.0},
+            0.0,
+            UI_OUTLINE_COLOR
+        );
         EndMode3D();
 
         // draw enemy words
-        {
-            for (int i = 0; i < world->n_enemies; ++i) {
-                Enemy enemy = world->enemies[i];
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy enemy = world->enemies[i];
 
-                Vector2 screen_pos = GetWorldToScreen(
-                    enemy.transform.translation, world->camera
-                );
-                Vector2 text_size = MeasureTextEx(
-                    resources->command_font,
-                    enemy.name,
-                    resources->command_font.baseSize,
-                    0
-                );
-
-                Vector2 rec_size = Vector2Scale(text_size, 1.2);
-                Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
-                Vector2 rec_pos = Vector2Subtract(
-                    rec_center, Vector2Scale(rec_size, 0.5)
-                );
-
-                Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
-                Vector2 text_pos = {
-                    rec_center.x - 0.5 * text_size.x,
-                    rec_center.y - 0.5 * resources->command_font.baseSize};
-
-                DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
-            }
-        }
-
-        // draw prompt
-        {
-            static char prompt[3] = {'>', ' ', '\0'};
-            Font font = resources->command_font;
-            Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
-            Vector2 text_size = MeasureTextEx(font, world->prompt, font.baseSize, 0);
-            float y = GetScreenHeight() - font.baseSize - 5;
-            DrawRectangle(
-                5.0 + prompt_size.x + text_size.x,
-                GetScreenHeight() - font.baseSize - 5,
-                2,
-                font.baseSize,
-                WHITE
+            Vector2 screen_pos = GetWorldToScreen(
+                enemy.transform.translation, world->camera
             );
-            draw_text(font, prompt, (Vector2){5.0, y}, 0);
-            draw_text(font, world->prompt, (Vector2){prompt_size.x, y}, 0);
+            Vector2 text_size = MeasureTextEx(
+                resources->command_font, enemy.name, resources->command_font.baseSize, 0
+            );
+
+            Vector2 rec_size = Vector2Scale(text_size, 1.2);
+            Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
+            Vector2 rec_pos = Vector2Subtract(rec_center, Vector2Scale(rec_size, 0.5));
+
+            Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
+            Vector2 text_pos = {
+                rec_center.x - 0.5 * text_size.x,
+                rec_center.y - 0.5 * resources->command_font.baseSize};
+
+            DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
+            draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
         }
 
-        // draw player ui (commands and health)
-        {
-            Rectangle rec = {2.0, 2.0, 200.0, 400.0};
-            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
-            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
+        // commands pane
+        Rectangle rec = {2.0, 2.0, 200.0, 400.0};
+        DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
+        DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
-            // draw player health
-            float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
+        // draw player health
+        float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
+        Color color = ColorFromNormalized((Vector4){
+            .x = 1.0 - ratio,
+            .y = ratio,
+            .z = 0.0,
+            .w = 1.0,
+        });
+        rec = (Rectangle){8.0, 8.0, 190.0, 20.0};
+        DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+        rec.width *= ratio;
+        DrawRectangleRounded(rec, 0.5, 16, color);
+
+        // stats pane
+        rec = (Rectangle){2.0, 408.0, 200.0, 100.0};
+        DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
+        DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
+
+        // draw enemies spawn progress bar
+        if (world->freeze_time > EPSILON) {
+            ratio = world->freeze_time / CRYONICS_DURATION;
+            color = BLUE;
+        } else {
+            ratio = 1.0 - fmaxf(0.0, world->spawn_countdown / world->spawn_period);
             Color color = ColorFromNormalized((Vector4){
-                .x = 1.0 - ratio,
-                .y = ratio,
+                .x = ratio,
+                .y = 1.0 - ratio,
                 .z = 0.0,
                 .w = 1.0,
             });
-            rec = (Rectangle){8.0, 8.0, 190.0, 20.0};
-            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
-            rec.width *= ratio;
-            DrawRectangleRounded(rec, 0.5, 16, color);
-
-            // draw commands
-            for (int i = 0; i < world->n_commands; ++i) {
-                Command *command = &world->commands[i];
-                float y = 40.0 + 1.8 * i * resources->command_font.baseSize;
-
-                float ratio;
-                ratio = fminf(1.0, command->time / command->cooldown);
-                Color color = ColorFromNormalized((Vector4){
-                    .x = 1.0 - ratio,
-                    .y = ratio,
-                    .z = 0.0,
-                    .w = 1.0,
-                });
-                float width = 190.0 * ratio;
-                draw_text(
-                    resources->command_font,
-                    command->name,
-                    (Vector2){8.0, y},
-                    world->prompt
-                );
-                Rectangle rec = {8.0, y + resources->command_font.baseSize, width, 5.0};
-                DrawRectangleRec(rec, color);
-            }
         }
+        rec = (Rectangle){8.0, 414.0, 190.0, 20.0};
+        DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+        rec.width *= ratio;
+        DrawRectangleRounded(rec, 0.5, 16, color);
 
-        // draw stats and progress ui
-        {
-            Rectangle rec = {2.0, 408.0, 200.0, 100.0};
-            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
-            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
+        // draw stats
+        draw_text(
+            resources->stats_font,
+            TextFormat("Kills: %d", world->n_enemies_killed),
+            (Vector2){8.0, 440},
+            0
+        );
+    }
 
-            // draw enemies spawn progress bar
-            float ratio = 1.0 - fmaxf(0.0, world->spawn_countdown / world->spawn_period);
-            Color color;
-            if (world->freeze_time > EPSILON) {
-                color = BLUE;
-            } else {
-                Color color = ColorFromNormalized((Vector4){
-                    .x = ratio,
-                    .y = 1.0 - ratio,
-                    .z = 0.0,
-                    .w = 1.0,
-                });
-            }
-            rec = (Rectangle){8.0, 414.0, 190.0, 20.0};
-            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
-            rec.width *= ratio;
-            DrawRectangleRounded(rec, 0.5, 16, color);
+    // draw commands
+    for (int i = 0; i < world->n_commands; ++i) {
+        Command *command = &world->commands[i];
+        float y = 40.0 + 1.8 * i * resources->command_font.baseSize;
 
-            // draw stats
-            draw_text(
-                resources->stats_font,
-                TextFormat("Kills: %d", world->n_enemies_killed),
-                (Vector2){8.0, 440},
-                0
-            );
+        float ratio;
+        ratio = fminf(1.0, command->time / command->cooldown);
+        Color color = ColorFromNormalized((Vector4){
+            .x = 1.0 - ratio,
+            .y = ratio,
+            .z = 0.0,
+            .w = 1.0,
+        });
+        draw_text(
+            resources->command_font, command->name, (Vector2){8.0, y}, world->prompt
+        );
+
+        // draw command countdown progress bar
+        if (world->state > STATE_MENU) {
+            float width = 190.0 * ratio;
+            Rectangle rec = {8.0, y + resources->command_font.baseSize, width, 5.0};
+            DrawRectangleRec(rec, color);
         }
     }
+
+    // draw prompt
+    static char prompt[3] = {'>', ' ', '\0'};
+    Font font = resources->command_font;
+    Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
+    Vector2 text_size = MeasureTextEx(font, world->prompt, font.baseSize, 0);
+    float y = GetScreenHeight() - font.baseSize - 5;
+    DrawRectangle(
+        5.0 + prompt_size.x + text_size.x,
+        GetScreenHeight() - font.baseSize - 5,
+        2,
+        font.baseSize,
+        WHITE
+    );
+    draw_text(font, prompt, (Vector2){5.0, y}, 0);
+    draw_text(font, world->prompt, (Vector2){prompt_size.x, y}, 0);
+
     EndDrawing();
 }
 
