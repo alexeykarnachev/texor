@@ -29,6 +29,9 @@
 #define MAX_ENEMY_SPEED_FACTOR 1.1
 #define BOSS_SPAWN_PERIOD 10  // in number of enemies
 #define PLAYER_SPEED 6.0
+#define PLAYER_MAX_HEALTH 100.0
+#define BACKSPACE_DAMAGE 1.0
+#define WRONG_COMMAND_DAMAGE 10.0
 
 // puase
 #define PAUSE_COOLDOWN 5.0
@@ -119,6 +122,9 @@ typedef struct Enemy {
 
     int n_effects;
     Effect effects[MAX_N_ENEMY_EFFECTS];
+
+    // for sorting
+    int n_matched_chars;
 } Enemy;
 
 typedef enum WorldState {
@@ -133,17 +139,20 @@ typedef struct World {
     int n_commands;
     Command commands[N_COMMANDS];
 
-    int n_enemies_spawned; // in total
+    int n_enemies_spawned;  // in total
+    int n_enemies_killed;
     int n_enemies;
     Enemy enemies[MAX_N_ENEMIES];
 
     char prompt[MAX_WORD_LEN];
     char submit_word[MAX_WORD_LEN];
+    bool is_command_matched;
 
     bool should_exit;
     float dt;
     float time;
     float freeze_time;
+    float spawn_period;
     float spawn_countdown;
     float spawn_radius;
     Vector3 spawn_position;
@@ -152,7 +161,8 @@ typedef struct World {
 } World;
 
 typedef struct Resources {
-    Font word_font;
+    Font command_font;
+    Font stats_font;
 
     int n_enemy_names;
     char enemy_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
@@ -178,6 +188,7 @@ static void draw_world(World *world, Resources *resources);
 static void draw_text(
     Font font, const char *text, Vector2 position, const char *match_prompt
 );
+static int sort_enemies(const void *enemy1, const void *enemy2);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -197,8 +208,11 @@ static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
     // init fonts
     const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
-    resources->word_font = LoadFontEx(font_file_path, 30, 0, 0);
-    SetTextureFilter(resources->word_font.texture, TEXTURE_FILTER_BILINEAR);
+    resources->command_font = LoadFontEx(font_file_path, 30, 0, 0);
+    SetTextureFilter(resources->command_font.texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->stats_font = LoadFontEx(font_file_path, 20, 0, 0);
+    SetTextureFilter(resources->stats_font.texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
     // init names
@@ -276,7 +290,7 @@ static void init_world(World *world) {
     world->player.transform.rotation = QuaternionIdentity();
     world->player.transform.scale = Vector3One();
     world->player.transform.translation = Vector3Zero();
-    world->player.max_health = 100.0;
+    world->player.max_health = PLAYER_MAX_HEALTH;
     world->player.health = world->player.max_health;
 
     // -------------------------------------------------------------------
@@ -311,6 +325,7 @@ static void update_world(World *world, Resources *resources) {
     world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
     world->freeze_time = fmaxf(0.0, world->freeze_time - world->dt);
     world->time += world->dt;
+    world->is_command_matched = false;
 
     bool is_altf4_pressed = IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_F4);
     world->should_exit = (WindowShouldClose() || is_altf4_pressed)
@@ -326,6 +341,12 @@ static void update_world(World *world, Resources *resources) {
         update_player(world);
     }
 
+    // damage player if submitted command doesn't exist
+    if (world->submit_word[0] != '\0' && !world->is_command_matched) {
+        world->player.health -= WRONG_COMMAND_DAMAGE;
+        world->player.health = fmaxf(0.0, world->player.health);
+    }
+
     world->submit_word[0] = '\0';
 }
 
@@ -336,6 +357,7 @@ static void update_prompt(World *world) {
         strcpy(world->submit_word, world->prompt);
         world->prompt[0] = '\0';
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
+        world->player.health -= BACKSPACE_DAMAGE;
         world->prompt[--prompt_len] = '\0';
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         world->prompt[prompt_len++] = pressed_char;
@@ -346,15 +368,20 @@ static void update_prompt(World *world) {
 static void update_enemies_spawn(World *world, Resources *resources) {
     // don't update spawn_countdown if the world is frozen
     if (world->freeze_time < EPSILON) {
-        world->spawn_countdown -= world->dt;
+        if (world->n_enemies == 0) {
+            world->spawn_countdown = 0.0;
+        } else {
+            world->spawn_countdown -= world->dt;
+        }
     }
 
     if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
 
     // https://www.desmos.com/calculator/jp6dgyycwn
-    world->spawn_countdown = fmaxf(
+    world->spawn_period = fmaxf(
         BASE_SPAWN_PERIOD * expf(-world->time * 0.001 * DIFFICULTY), 1.0
     );
+    world->spawn_countdown = world->spawn_period;
     float speed_factor = BASE_ENEMY_SPEED_FACTOR
                          + (MAX_ENEMY_SPEED_FACTOR - BASE_ENEMY_SPEED_FACTOR)
                                * (1.0 - expf(-world->time * 0.001 * DIFFICULTY));
@@ -401,9 +428,10 @@ static void update_commands(World *world) {
         Command *command = &world->commands[i];
         command->time += dt;
 
-        bool is_match = strcmp(submit_word, command->name) == 0;
         bool is_ready = command->time > command->cooldown;
-        if (is_match && is_ready) {
+        bool is_command_matched = strcmp(submit_word, command->name) == 0;
+        world->is_command_matched |= is_command_matched;
+        if (is_command_matched && is_ready) {
             if (command->type == COMMAND_PAUSE && world->state == STATE_PLAYING) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "continue");
@@ -468,6 +496,16 @@ static void update_enemies(World *world) {
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
 
+        // count number of matched chars with prompt
+        enemy->n_matched_chars = 0;
+        char *str1 = enemy->name;
+        char *str2 = world->prompt;
+        while (*str1 && *str2 && *str1 == *str2) {
+            enemy->n_matched_chars++;
+            str1++;
+            str2++;
+        }
+
         if (strcmp(submit_word, enemy->name) == 0) {
             kill_enemy_idx = i;
             continue;
@@ -525,12 +563,17 @@ static void update_enemies(World *world) {
 
     if (kill_enemy_idx != -1) {
         world->n_enemies -= 1;
+        world->n_enemies_killed += 1;
+        world->is_command_matched = true;
         memmove(
             &world->enemies[kill_enemy_idx],
             &world->enemies[kill_enemy_idx + 1],
             sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
         );
     }
+
+    // sort enemies
+    qsort(world->enemies, world->n_enemies, sizeof(Enemy), sort_enemies);
 }
 
 static void update_player(World *world) {
@@ -649,7 +692,10 @@ static void draw_world(World *world, Resources *resources) {
                     enemy.transform.translation, world->camera
                 );
                 Vector2 text_size = MeasureTextEx(
-                    resources->word_font, enemy.name, resources->word_font.baseSize, 0
+                    resources->command_font,
+                    enemy.name,
+                    resources->command_font.baseSize,
+                    0
                 );
 
                 Vector2 rec_size = Vector2Scale(text_size, 1.2);
@@ -661,17 +707,17 @@ static void draw_world(World *world, Resources *resources) {
                 Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
                 Vector2 text_pos = {
                     rec_center.x - 0.5 * text_size.x,
-                    rec_center.y - 0.5 * resources->word_font.baseSize};
+                    rec_center.y - 0.5 * resources->command_font.baseSize};
 
                 DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(resources->word_font, enemy.name, text_pos, world->prompt);
+                draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
             }
         }
 
         // draw prompt
         {
             static char prompt[3] = {'>', ' ', '\0'};
-            Font font = resources->word_font;
+            Font font = resources->command_font;
             Vector2 prompt_size = MeasureTextEx(font, prompt, font.baseSize, 0);
             Vector2 text_size = MeasureTextEx(font, world->prompt, font.baseSize, 0);
             float y = GetScreenHeight() - font.baseSize - 5;
@@ -686,7 +732,7 @@ static void draw_world(World *world, Resources *resources) {
             draw_text(font, world->prompt, (Vector2){prompt_size.x, y}, 0);
         }
 
-        // draw in-game ui
+        // draw player ui (commands and health)
         {
             Rectangle rec = {2.0, 2.0, 200.0, 400.0};
             DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
@@ -708,7 +754,7 @@ static void draw_world(World *world, Resources *resources) {
             // draw commands
             for (int i = 0; i < world->n_commands; ++i) {
                 Command *command = &world->commands[i];
-                float y = 40.0 + 1.8 * i * resources->word_font.baseSize;
+                float y = 40.0 + 1.8 * i * resources->command_font.baseSize;
 
                 float ratio;
                 ratio = fminf(1.0, command->time / command->cooldown);
@@ -720,11 +766,47 @@ static void draw_world(World *world, Resources *resources) {
                 });
                 float width = 190.0 * ratio;
                 draw_text(
-                    resources->word_font, command->name, (Vector2){8.0, y}, world->prompt
+                    resources->command_font,
+                    command->name,
+                    (Vector2){8.0, y},
+                    world->prompt
                 );
-                Rectangle rec = {8.0, y + resources->word_font.baseSize, width, 5.0};
+                Rectangle rec = {8.0, y + resources->command_font.baseSize, width, 5.0};
                 DrawRectangleRec(rec, color);
             }
+        }
+
+        // draw stats and progress ui
+        {
+            Rectangle rec = {2.0, 408.0, 200.0, 100.0};
+            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
+            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
+
+            // draw enemies spawn progress bar
+            float ratio = 1.0 - fmaxf(0.0, world->spawn_countdown / world->spawn_period);
+            Color color;
+            if (world->freeze_time > EPSILON) {
+                color = BLUE;
+            } else {
+                Color color = ColorFromNormalized((Vector4){
+                    .x = ratio,
+                    .y = 1.0 - ratio,
+                    .z = 0.0,
+                    .w = 1.0,
+                });
+            }
+            rec = (Rectangle){8.0, 414.0, 190.0, 20.0};
+            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+            rec.width *= ratio;
+            DrawRectangleRounded(rec, 0.5, 16, color);
+
+            // draw stats
+            draw_text(
+                resources->stats_font,
+                TextFormat("Kills: %d", world->n_enemies_killed),
+                (Vector2){8.0, 440},
+                0
+            );
         }
     }
     EndDrawing();
@@ -766,4 +848,12 @@ static void draw_text(
             offset += ((float)font.glyphs[index].advanceX * scale);
         }
     }
+}
+
+static int sort_enemies(const void *enemy1, const void *enemy2) {
+    int n1 = ((Enemy *)enemy1)->n_matched_chars;
+    int n2 = ((Enemy *)enemy2)->n_matched_chars;
+    if (n1 > n2) return 1;
+    else if (n1 < n2) return -1;
+    else return 0;
 }
