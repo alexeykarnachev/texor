@@ -23,7 +23,7 @@
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
-#define DIFFICULTY 6.0
+// #define DIFFICULTY 6.0
 #define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.3
 #define MAX_ENEMY_SPEED_FACTOR 1.1
@@ -32,6 +32,12 @@
 #define PLAYER_MAX_HEALTH 100.0
 #define BACKSPACE_DAMAGE 1.0
 #define WRONG_COMMAND_DAMAGE 10.0
+
+// difficulties
+#define DIFFICULTY_EASY 1
+#define DIFFICULTY_MEDIUM 3
+#define DIFFICULTY_HARD 6
+#define DIFFICULTY_MONKEYTYPE 10
 
 // puase
 #define PAUSE_COOLDOWN 5.0
@@ -71,7 +77,11 @@ typedef struct Effect {
 } Effect;
 
 typedef enum CommandType {
-    COMMAND_START_GAME,
+    COMMAND_START_EASY,
+    COMMAND_START_MEDIUM,
+    COMMAND_START_HARD,
+    COMMAND_START_MONKEYTYPE,
+
     COMMAND_EXIT_GAME,
 
     COMMAND_PAUSE,
@@ -86,6 +96,8 @@ typedef enum CommandType {
 typedef struct Command {
     float cooldown;
     float time;
+    bool show_separator;
+    bool show_cooldown;
     char name[MAX_WORD_LEN];
 
     CommandType type;
@@ -158,6 +170,10 @@ typedef struct World {
     float spawn_period;
     float spawn_countdown;
     float spawn_radius;
+    int difficulty;
+    char difficulty_str[MAX_WORD_LEN];
+    int n_backspaces_typed;  // in total
+    int n_keystrokes_typed;  // in total
     Vector3 spawn_position;
     Camera3D camera;
     WorldState state;
@@ -180,6 +196,8 @@ static World WORLD;
 static void init_resources(Resources *resources);
 static void init_world(World *world);
 static void init_menu_commands(World *world);
+static void init_playing_commands(World *world);
+static void init_game_over_commands(World *world);
 static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
@@ -275,33 +293,44 @@ static void init_world(World *world) {
 
 static void init_menu_commands(World *world) {
     world->n_commands = 0;
-
-    // start command
     Command command = {0};
-    memset(&command, 0, sizeof(Command));
-    command.cooldown = 0.0;
-    command.time = command.cooldown;
-    command.type = COMMAND_START_GAME;
-    strcpy(command.name, "start");
+
+    // start easy command
+    command.type = COMMAND_START_EASY;
+    strcpy(command.name, "easy");
+    world->commands[world->n_commands++] = command;
+
+    // start medium command
+    command.type = COMMAND_START_MEDIUM;
+    strcpy(command.name, "medium");
+    world->commands[world->n_commands++] = command;
+
+    // start hard command
+    command.type = COMMAND_START_HARD;
+    strcpy(command.name, "hard");
+    world->commands[world->n_commands++] = command;
+
+    // start monkeytype command
+    command.type = COMMAND_START_MONKEYTYPE;
+    strcpy(command.name, "monkeytype");
     world->commands[world->n_commands++] = command;
 
     // exit command
-    memset(&command, 0, sizeof(Command));
-    command.cooldown = 0.0;
-    command.time = command.cooldown;
     command.type = COMMAND_EXIT_GAME;
+    command.show_separator = true;
     strcpy(command.name, "exit");
     world->commands[world->n_commands++] = command;
 }
 
 static void init_playing_commands(World *world) {
     world->n_commands = 0;
+    Command command = {0};
 
     // pause command
-    Command command = {0};
     command.cooldown = PAUSE_COOLDOWN;
     command.time = command.cooldown;
     command.type = COMMAND_PAUSE;
+    command.show_cooldown = true;
     strcpy(command.name, "pause");
     world->commands[world->n_commands++] = command;
 
@@ -310,6 +339,7 @@ static void init_playing_commands(World *world) {
     command.cooldown = CRYONICS_COOLDOWN;
     command.time = command.cooldown;
     command.type = COMMAND_CRYONICS;
+    command.show_cooldown = true;
     command.cryonics.duration = CRYONICS_DURATION;
     strcpy(command.name, "cryonics");
     world->commands[world->n_commands++] = command;
@@ -319,6 +349,7 @@ static void init_playing_commands(World *world) {
     command.cooldown = REPULSE_COOLDOWN;
     command.time = command.cooldown;
     command.type = COMMAND_REPULSE;
+    command.show_cooldown = true;
     command.repulse.speed = REPULSE_SPEED;
     command.repulse.deceleration = REPULSE_DECELERATION;
     command.repulse.radius = REPULSE_RADIUS;
@@ -330,14 +361,29 @@ static void init_playing_commands(World *world) {
     command.cooldown = DECAY_COOLDOWN;
     command.time = command.cooldown;
     command.type = COMMAND_DECAY;
+    command.show_cooldown = true;
     command.decay.strength = DECAY_STRENGTH;
     strcpy(command.name, "decay");
     world->commands[world->n_commands++] = command;
 
     // exit command
     memset(&command, 0, sizeof(Command));
-    command.cooldown = 0.0;
-    command.time = command.cooldown;
+    command.type = COMMAND_EXIT_GAME;
+    command.show_cooldown = false;
+    strcpy(command.name, "exit");
+    world->commands[world->n_commands++] = command;
+}
+
+static void init_game_over_commands(World *world) {
+    world->n_commands = 0;
+    Command command = {0};
+
+    // restart command
+    command.type = COMMAND_RESTART_GAME;
+    strcpy(command.name, "restart");
+    world->commands[world->n_commands++] = command;
+
+    // exit command
     command.type = COMMAND_EXIT_GAME;
     strcpy(command.name, "exit");
     world->commands[world->n_commands++] = command;
@@ -369,6 +415,10 @@ static void update_world(World *world, Resources *resources) {
     update_enemies(world);
     update_player(world);
 
+    if (world->submit_word[0] != '\0' && !world->is_command_matched) {
+        world->n_backspaces_typed += strlen(world->submit_word);
+    }
+
     world->submit_word[0] = '\0';
 }
 
@@ -376,10 +426,13 @@ static void update_prompt(World *world) {
     int prompt_len = strlen(world->prompt);
     int pressed_char = GetCharPressed();
     if (IsKeyPressed(KEY_ENTER) > 0) {
+        world->n_keystrokes_typed += strlen(world->prompt);
         strcpy(world->submit_word, world->prompt);
         world->prompt[0] = '\0';
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
         world->prompt[--prompt_len] = '\0';
+        world->n_backspaces_typed += 1;
+        world->n_keystrokes_typed += 1;
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         world->prompt[prompt_len++] = pressed_char;
         world->prompt[prompt_len] = '\0';
@@ -402,12 +455,12 @@ static void update_enemies_spawn(World *world, Resources *resources) {
 
     // https://www.desmos.com/calculator/jp6dgyycwn
     world->spawn_period = fmaxf(
-        BASE_SPAWN_PERIOD * expf(-world->time * 0.001 * DIFFICULTY), 1.0
+        BASE_SPAWN_PERIOD * expf(-world->time * 0.001 * world->difficulty), 1.0
     );
     world->spawn_countdown = world->spawn_period;
     float speed_factor = BASE_ENEMY_SPEED_FACTOR
                          + (MAX_ENEMY_SPEED_FACTOR - BASE_ENEMY_SPEED_FACTOR)
-                               * (1.0 - expf(-world->time * 0.001 * DIFFICULTY));
+                               * (1.0 - expf(-world->time * 0.001 * world->difficulty));
     float speed = PLAYER_SPEED * speed_factor;
 
     TraceLog(
@@ -457,8 +510,25 @@ static void update_commands(World *world) {
         if (is_command_matched && is_ready) {
             if (command->type == COMMAND_EXIT_GAME) {
                 world->should_exit = true;
-            } else if (command->type == COMMAND_START_GAME) {
+            } else if (command->type == COMMAND_START_EASY) {
                 world->state = STATE_PLAYING;
+                world->difficulty = DIFFICULTY_EASY;
+                strcpy(world->difficulty_str, command->name);
+                init_playing_commands(world);
+            } else if (command->type == COMMAND_START_MEDIUM) {
+                world->state = STATE_PLAYING;
+                world->difficulty = DIFFICULTY_MEDIUM;
+                strcpy(world->difficulty_str, command->name);
+                init_playing_commands(world);
+            } else if (command->type == COMMAND_START_HARD) {
+                world->state = STATE_PLAYING;
+                world->difficulty = DIFFICULTY_HARD;
+                strcpy(world->difficulty_str, command->name);
+                init_playing_commands(world);
+            } else if (command->type == COMMAND_START_MONKEYTYPE) {
+                world->state = STATE_PLAYING;
+                world->difficulty = DIFFICULTY_MONKEYTYPE;
+                strcpy(world->difficulty_str, command->name);
                 init_playing_commands(world);
             } else if (command->type == COMMAND_PAUSE && world->state == STATE_PLAYING) {
                 command->time = command->cooldown + 1.0;
@@ -470,8 +540,6 @@ static void update_commands(World *world) {
                 world->state = STATE_PLAYING;
             } else if (command->type == COMMAND_RESTART_GAME) {
                 init_world(world);
-                world->state = STATE_PLAYING;
-                init_playing_commands(world);
             } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING) {
                 world->freeze_time = command->cryonics.duration;
                 command->time = 0.0;
@@ -610,18 +678,7 @@ static void update_player(World *world) {
     Player *player = &world->player;
     if (player->health <= 0.0) {
         world->state = STATE_GAME_OVER;
-
-        Command *command = &world->commands[0];
-        command->type = COMMAND_RESTART_GAME;
-        command->cooldown = 0.0;
-        strcpy(command->name, "restart");
-
-        command = &world->commands[1];
-        command->type = COMMAND_EXIT_GAME;
-        command->cooldown = 0.0;
-        strcpy(command->name, "exit");
-
-        world->n_commands = 2;
+        init_game_over_commands(world);
         return;
     }
 
@@ -649,7 +706,6 @@ static void update_player(World *world) {
         if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE))
             && prompt_len > 0) {
             world->player.health -= BACKSPACE_DAMAGE;
-            world->prompt[--prompt_len] = '\0';
         }
     }
 
@@ -729,76 +785,120 @@ static void draw_world(World *world, Resources *resources) {
         );
         EndMode3D();
 
-        // draw enemy words
-        for (int i = 0; i < world->n_enemies; ++i) {
-            Enemy enemy = world->enemies[i];
+        if (world->state < STATE_GAME_OVER) {
+            // draw enemy names
+            for (int i = 0; i < world->n_enemies; ++i) {
+                Enemy enemy = world->enemies[i];
 
-            Vector2 screen_pos = GetWorldToScreen(
-                enemy.transform.translation, world->camera
-            );
-            Vector2 text_size = MeasureTextEx(
-                resources->command_font, enemy.name, resources->command_font.baseSize, 0
-            );
+                Vector2 screen_pos = GetWorldToScreen(
+                    enemy.transform.translation, world->camera
+                );
+                Vector2 text_size = MeasureTextEx(
+                    resources->command_font,
+                    enemy.name,
+                    resources->command_font.baseSize,
+                    0
+                );
 
-            Vector2 rec_size = Vector2Scale(text_size, 1.2);
-            Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
-            Vector2 rec_pos = Vector2Subtract(rec_center, Vector2Scale(rec_size, 0.5));
+                Vector2 rec_size = Vector2Scale(text_size, 1.2);
+                Vector2 rec_center = {screen_pos.x, screen_pos.y - 35.0};
+                Vector2 rec_pos = Vector2Subtract(
+                    rec_center, Vector2Scale(rec_size, 0.5)
+                );
 
-            Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
-            Vector2 text_pos = {
-                rec_center.x - 0.5 * text_size.x,
-                rec_center.y - 0.5 * resources->command_font.baseSize};
+                Rectangle rec = {rec_pos.x, rec_pos.y, rec_size.x, rec_size.y};
+                Vector2 text_pos = {
+                    rec_center.x - 0.5 * text_size.x,
+                    rec_center.y - 0.5 * resources->command_font.baseSize};
 
-            DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
-            draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
-        }
+                DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
+                draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
+            }
 
-        // commands pane
-        Rectangle rec = {2.0, 2.0, 200.0, 400.0};
-        DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
-        DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
+            // commands pane
+            Rectangle rec = {2.0, 2.0, 200.0, 400.0};
+            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
+            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
-        // draw player health
-        float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
-        Color color = ColorFromNormalized((Vector4){
-            .x = 1.0 - ratio,
-            .y = ratio,
-            .z = 0.0,
-            .w = 1.0,
-        });
-        rec = (Rectangle){8.0, 8.0, 190.0, 20.0};
-        DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
-        rec.width *= ratio;
-        DrawRectangleRounded(rec, 0.5, 16, color);
+            // stats pane
+            rec = (Rectangle){2.0, 408.0, 200.0, 150.0};
+            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
+            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
-        // stats pane
-        rec = (Rectangle){2.0, 408.0, 200.0, 100.0};
-        DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
-        DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
-
-        // draw enemies spawn progress bar
-        if (world->freeze_time > EPSILON) {
-            ratio = world->freeze_time / CRYONICS_DURATION;
-            color = BLUE;
-        } else {
-            ratio = 1.0 - fmaxf(0.0, world->spawn_countdown / world->spawn_period);
+            // draw player health
+            float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
             Color color = ColorFromNormalized((Vector4){
-                .x = ratio,
-                .y = 1.0 - ratio,
+                .x = 1.0 - ratio,
+                .y = ratio,
                 .z = 0.0,
                 .w = 1.0,
             });
-        }
-        rec = (Rectangle){8.0, 414.0, 190.0, 20.0};
-        DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
-        rec.width *= ratio;
-        DrawRectangleRounded(rec, 0.5, 16, color);
+            rec = (Rectangle){8.0, 8.0, 190.0, 20.0};
+            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+            rec.width *= ratio;
+            DrawRectangleRounded(rec, 0.5, 16, color);
 
+            // draw enemies spawn progress bar
+            if (world->freeze_time > EPSILON) {
+                ratio = world->freeze_time / CRYONICS_DURATION;
+                color = BLUE;
+            } else {
+                ratio = 1.0 - fmaxf(0.0, world->spawn_countdown / world->spawn_period);
+                Color color = ColorFromNormalized((Vector4){
+                    .x = ratio,
+                    .y = 1.0 - ratio,
+                    .z = 0.0,
+                    .w = 1.0,
+                });
+            }
+            rec = (Rectangle){8.0, 414.0, 190.0, 20.0};
+            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+            rec.width *= ratio;
+            DrawRectangleRounded(rec, 0.5, 16, color);
+        }
+
+        // ---------------------------------------------------------------
         // draw stats
+        int y = 448;
         draw_text(
             resources->stats_font,
             TextFormat("Kills: %d", world->n_enemies_killed),
-            (Vector2){8.0, 440},
+            (Vector2){8.0, y},
+            0
+        );
+
+        y += resources->stats_font.baseSize;
+        draw_text(
+            resources->stats_font,
+            TextFormat("Play time: %d s", (int)world->time),
+            (Vector2){8.0, y},
+            0
+        );
+
+        y += resources->stats_font.baseSize;
+        draw_text(
+            resources->stats_font,
+            TextFormat("Keystrokes: %d", (int)world->n_keystrokes_typed),
+            (Vector2){8.0, y},
+            0
+        );
+
+        y += resources->stats_font.baseSize;
+        draw_text(
+            resources->stats_font,
+            TextFormat(
+                "Accuracy: %.2f",
+                1.0 - (float)world->n_backspaces_typed / world->n_keystrokes_typed
+            ),
+            (Vector2){8.0, y},
+            0
+        );
+
+        y += resources->stats_font.baseSize;
+        draw_text(
+            resources->stats_font,
+            TextFormat("Difficulty: %s", world->difficulty_str),
+            (Vector2){8.0, y},
             0
         );
     }
@@ -816,12 +916,22 @@ static void draw_world(World *world, Resources *resources) {
             .z = 0.0,
             .w = 1.0,
         });
+
+        if (command->show_separator) {
+            DrawLineEx(
+                (Vector2){8.0, y - 4.0},
+                (Vector2){200.0, y - 4.0},
+                2,
+                ColorAlpha(WHITE, 0.3)
+            );
+        }
+
         draw_text(
             resources->command_font, command->name, (Vector2){8.0, y}, world->prompt
         );
 
-        // draw command countdown progress bar
-        if (world->state > STATE_MENU) {
+        // draw command cooldown progress bar
+        if (command->show_cooldown) {
             float width = 190.0 * ratio;
             Rectangle rec = {8.0, y + resources->command_font.baseSize, width, 5.0};
             DrawRectangleRec(rec, color);
