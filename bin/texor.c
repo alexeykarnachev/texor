@@ -23,7 +23,9 @@
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
-// #define DIFFICULTY 6.0
+// shot
+#define SHOT_TRACE_DURATION 0.2
+
 #define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.3
 #define MAX_ENEMY_SPEED_FACTOR 1.1
@@ -75,6 +77,13 @@ typedef struct Effect {
         } impulse;
     };
 } Effect;
+
+typedef struct Shot {
+    float time;
+    float trace_duration;
+    Vector3 start_position;
+    Vector3 end_position;
+} Shot;
 
 typedef enum CommandType {
     COMMAND_START_EASY,
@@ -150,6 +159,7 @@ typedef enum WorldState {
 
 typedef struct World {
     Player player;
+    Shot shot;
 
     int n_commands;
     Command commands[N_COMMANDS];
@@ -414,6 +424,7 @@ static void update_world(World *world, Resources *resources) {
     update_enemies_spawn(world, resources);
     update_enemies(world);
     update_player(world);
+    world->shot.time += world->dt;
 
     if (world->submit_word[0] != '\0' && !world->is_command_matched) {
         world->n_backspaces_typed += strlen(world->submit_word);
@@ -605,6 +616,11 @@ static void update_enemies(World *world) {
         }
 
         if (strcmp(submit_word, enemy->name) == 0) {
+            world->shot = (Shot
+            ){.time = 0.0,
+              .trace_duration = SHOT_TRACE_DURATION,
+              .start_position = world->player.transform.translation,
+              .end_position = enemy->transform.translation};
             kill_enemy_idx = i;
             continue;
         }
@@ -691,8 +707,16 @@ static void update_player(World *world) {
     int pressed_char = GetCharPressed();
     if (Vector2Length(dir) > EPSILON) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), PLAYER_SPEED * world->dt);
-        player->transform.translation.x += step.x;
-        player->transform.translation.y += step.y;
+
+        Vector3 position = player->transform.translation;
+        position.x += step.x;
+        position.y += step.y;
+
+        if (Vector3Length(position) > world->spawn_radius) {
+            position = Vector3Scale(Vector3Normalize(position), world->spawn_radius);
+        }
+
+        player->transform.translation = position;
     }
 
     if (world->state == STATE_PLAYING) {
@@ -783,6 +807,19 @@ static void draw_world(World *world, Resources *resources) {
             0.0,
             UI_OUTLINE_COLOR
         );
+
+        // draw shot
+        Shot *shot = &world->shot;
+        if (shot->time < shot->trace_duration) {
+            Vector3 a = shot->start_position;
+            Vector3 b = shot->end_position;
+            Vector3 d = Vector3Normalize(Vector3Subtract(b, a));
+            a = Vector3Add(a, Vector3Scale(d, 2.0));
+            alpha = 1.0 - shot->time / shot->trace_duration;
+            Color color = {255, 240, 50};
+            DrawCylinderEx(a, b, 0.2, 0.4, 8, ColorAlpha(color, alpha));
+        }
+
         EndMode3D();
 
         if (world->state < STATE_GAME_OVER) {
@@ -859,6 +896,8 @@ static void draw_world(World *world, Resources *resources) {
 
         // ---------------------------------------------------------------
         // draw stats
+        // TODO: draw stats only on the STATE_GAME_OVER
+        // if (world->state == STATE_GAME_OVER) {
         int y = 448;
         draw_text(
             resources->stats_font,
@@ -901,6 +940,7 @@ static void draw_world(World *world, Resources *resources) {
             (Vector2){8.0, y},
             0
         );
+        // }
     }
 
     // draw commands
