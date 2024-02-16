@@ -2,6 +2,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rcamera.h"
+#include <asm-generic/errno.h>
 #include <ctype.h>
 #include <float.h>
 #include <math.h>
@@ -24,7 +25,7 @@
 #define MAX_N_ENEMY_EFFECTS 16
 
 // shot
-#define SHOT_TRACE_DURATION 0.2
+#define SHOT_TRACE_DURATION 0.08
 
 #define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.3
@@ -44,7 +45,7 @@
 // puase
 #define PAUSE_COOLDOWN 5.0
 // cryonics
-#define CRYONICS_COOLDOWN 40.0
+#define CRYONICS_COOLDOWN 30.0
 #define CRYONICS_DURATION 10.0
 // repulse
 #define REPULSE_COOLDOWN 20.0
@@ -57,26 +58,6 @@
 
 #define UI_BACKGROUND_COLOR ((Color){20, 20, 20, 255})
 #define UI_OUTLINE_COLOR ((Color){0, 40, 0, 255})
-
-typedef enum EffectType {
-    EFFECT_FREEZE,
-    EFFECT_IMPULSE,
-} EffectType;
-
-typedef struct Effect {
-    EffectType type;
-    union {
-        struct {
-            float time;
-        } freeze;
-
-        struct {
-            float speed;
-            float deceleration;
-            Vector3 direction;
-        } impulse;
-    };
-} Effect;
 
 typedef struct Shot {
     float time;
@@ -143,8 +124,11 @@ typedef struct Enemy {
     float recent_attack_time;
     char name[MAX_WORD_LEN];
 
-    int n_effects;
-    Effect effects[MAX_N_ENEMY_EFFECTS];
+    struct {
+        float speed;
+        float deceleration;
+        Vector3 direction;
+    } impulse;
 
     // for sorting
     int n_matched_chars;
@@ -454,7 +438,7 @@ static void update_enemies_spawn(World *world, Resources *resources) {
     if (world->state != STATE_PLAYING) return;
 
     // don't update spawn_countdown if the world is frozen
-    if (world->freeze_time < EPSILON) {
+    if (world->freeze_time <= EPSILON) {
         if (world->n_enemies == 0) {
             world->spawn_countdown = 0.0;
         } else {
@@ -551,18 +535,14 @@ static void update_commands(World *world) {
                 world->state = STATE_PLAYING;
             } else if (command->type == COMMAND_RESTART_GAME) {
                 init_world(world);
-            } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING) {
+            } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING && world->freeze_time <= EPSILON) {
+                command->time = command->cooldown + 1.0;
+                strcpy(command->name, "unfreeze");
                 world->freeze_time = command->cryonics.duration;
+            } else if (command->type == COMMAND_CRYONICS && world->freeze_time >= EPSILON) {
                 command->time = 0.0;
-                for (int i = 0; i < world->n_enemies; ++i) {
-                    Enemy *enemy = &world->enemies[i];
-                    Effect effect = {
-                        .type = EFFECT_FREEZE,
-                        .freeze = {.time = command->cryonics.duration}};
-                    if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
-                        enemy->effects[enemy->n_effects++] = effect;
-                    }
-                }
+                strcpy(command->name, "cryonics");
+                world->freeze_time = 0.0;
             } else if (command->type == COMMAND_REPULSE && world->state == STATE_PLAYING) {
                 command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
@@ -573,15 +553,9 @@ static void update_commands(World *world) {
                     float dist = Vector3Length(vec);
                     Vector3 dir = Vector3Normalize(vec);
                     if (dist < command->repulse.radius) {
-                        Effect effect = {
-                            .type = EFFECT_IMPULSE,
-                            .impulse = {
-                                .speed = command->repulse.speed,
-                                .deceleration = command->repulse.deceleration,
-                                .direction = dir}};
-                        if (enemy->n_effects < MAX_N_ENEMY_EFFECTS) {
-                            enemy->effects[enemy->n_effects++] = effect;
-                        }
+                        enemy->impulse.deceleration = command->repulse.deceleration;
+                        enemy->impulse.speed = command->repulse.speed;
+                        enemy->impulse.direction = dir;
                     }
                 }
             } else if (command->type == COMMAND_DECAY && world->state == STATE_PLAYING) {
@@ -630,29 +604,18 @@ static void update_enemies(World *world) {
         bool can_attack = true;
         Vector3 step = {0};
 
-        int n_active_effects = 0;
-        static Effect active_effects[MAX_N_ENEMY_EFFECTS];
-        for (int effect_i = 0; effect_i < enemy->n_effects; ++effect_i) {
-            Effect effect = enemy->effects[effect_i];
-            if (effect.type == EFFECT_FREEZE && effect.freeze.time > 0) {
-                effect.freeze.time -= world->dt;
-                can_move = false;
-                can_attack = false;
-
-                active_effects[n_active_effects++] = effect;
-            } else if (effect.type == EFFECT_IMPULSE && effect.impulse.speed > 0.0) {
-                Vector3 dir = Vector3Normalize(effect.impulse.direction);
-                step = Vector3Scale(dir, effect.impulse.speed * world->dt);
-                effect.impulse.speed -= effect.impulse.deceleration * world->dt;
-                can_move = false;
-                can_attack = false;
-
-                active_effects[n_active_effects++] = effect;
-            }
+        if (world->freeze_time >= EPSILON) {
+            can_move = false;
+            can_attack = false;
         }
 
-        enemy->n_effects = n_active_effects;
-        memcpy(enemy->effects, active_effects, sizeof(Effect) * n_active_effects);
+        if (enemy->impulse.speed > 0.0) {
+            Vector3 dir = Vector3Normalize(enemy->impulse.direction);
+            step = Vector3Scale(dir, enemy->impulse.speed * world->dt);
+            enemy->impulse.speed -= enemy->impulse.deceleration * world->dt;
+            can_move = false;
+            can_attack = false;
+        }
 
         // apply enemy movements and attacks
         enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
@@ -704,8 +667,7 @@ static void update_player(World *world) {
     dir.x -= IsKeyDown(KEY_LEFT);
     dir.x += IsKeyDown(KEY_RIGHT);
 
-    int pressed_char = GetCharPressed();
-    if (Vector2Length(dir) > EPSILON) {
+    if (Vector2Length(dir) >= EPSILON) {
         Vector2 step = Vector2Scale(Vector2Normalize(dir), PLAYER_SPEED * world->dt);
 
         Vector3 position = player->transform.translation;
@@ -782,16 +744,7 @@ static void draw_world(World *world, Resources *resources) {
         // draw enemies
         for (int i = 0; i < world->n_enemies; ++i) {
             Enemy enemy = world->enemies[i];
-
-            Color color = RED;
-            for (int effect_i = 0; effect_i < enemy.n_effects; ++effect_i) {
-                Effect effect = enemy.effects[effect_i];
-                if (effect.type == EFFECT_FREEZE) {
-                    color = BLUE;
-                    break;
-                }
-            }
-
+            Color color = world->freeze_time >= EPSILON ? BLUE : RED;
             DrawSphere(enemy.transform.translation, 1.0, color);
         }
 
@@ -876,12 +829,12 @@ static void draw_world(World *world, Resources *resources) {
             DrawRectangleRounded(rec, 0.5, 16, color);
 
             // draw enemies spawn progress bar
-            if (world->freeze_time > EPSILON) {
+            if (world->freeze_time >= EPSILON) {
                 ratio = world->freeze_time / CRYONICS_DURATION;
                 color = BLUE;
             } else {
                 ratio = 1.0 - fmaxf(0.0, world->spawn_countdown / world->spawn_period);
-                Color color = ColorFromNormalized((Vector4){
+                color = ColorFromNormalized((Vector4){
                     .x = ratio,
                     .y = 1.0 - ratio,
                     .z = 0.0,
@@ -944,9 +897,10 @@ static void draw_world(World *world, Resources *resources) {
     }
 
     // draw commands
+    int n = 0;
     for (int i = 0; i < world->n_commands; ++i) {
         Command *command = &world->commands[i];
-        float y = 40.0 + 1.8 * i * resources->command_font.baseSize;
+        float y = 40.0 + 1.8 * (n++) * resources->command_font.baseSize;
 
         float ratio;
         ratio = fminf(1.0, command->time / command->cooldown);
