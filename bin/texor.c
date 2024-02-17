@@ -808,7 +808,8 @@ static void update_player(World *world) {
     dir.x += IsKeyDown(KEY_RIGHT);
 
     if (Vector2Length(dir) >= EPSILON) {
-        Vector2 step = Vector2Scale(Vector2Normalize(dir), PLAYER_SPEED * world->dt);
+        dir = Vector2Normalize(dir);
+        Vector2 step = Vector2Scale(dir, PLAYER_SPEED * world->dt);
 
         Vector3 position = player->transform.translation;
         position.x += step.x;
@@ -819,6 +820,9 @@ static void update_player(World *world) {
         }
 
         player->transform.translation = position;
+        player->transform.rotation = QuaternionFromVector3ToVector3(
+            (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
+        );
     }
 
     if (world->state == STATE_PLAYING) {
@@ -1183,9 +1187,14 @@ static void draw_animated_sprite(
     SetShaderValue(resources->sprite_material.shader, loc, src, SHADER_UNIFORM_VEC4);
     resources->sprite_material.maps[0].texture = animated_sprite.texture;
 
+    Vector3 axis;
+    float angle;
+    QuaternionToAxisAngle(transform.rotation, &axis, &angle);
+
     rlPushMatrix();
     rlTranslatef(transform.translation.x, transform.translation.y, 0.0);
     rlRotatef(90.0, 1.0, 0.0, 0.0);
+    rlRotatef(RAD2DEG * angle, axis.x, axis.z, axis.y);
     DrawMesh(resources->sprite_plane, resources->sprite_material, MatrixIdentity());
     rlPopMatrix();
 }
