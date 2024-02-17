@@ -2,6 +2,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rcamera.h"
+#include "rlgl.h"
 #include <asm-generic/errno.h>
 #include <ctype.h>
 #include <float.h>
@@ -147,10 +148,23 @@ typedef struct Command {
     };
 } Command;
 
+typedef struct AnimatedSprite {
+    Texture2D texture;
+    int n_frames;
+    int frame_width;
+    int frame_idx;
+    int fps;
+
+    float time;
+    bool is_repeat;
+} AnimatedSprite;
+
 typedef struct Player {
     Transform transform;
     float max_health;
     float health;
+
+    AnimatedSprite animated_sprite;
 } Player;
 
 typedef struct Enemy {
@@ -219,18 +233,23 @@ typedef struct Resources {
     Font command_font;
     Font stats_font;
 
+    Mesh sprite_plane;
+    Material sprite_material;
+
     int n_enemy_names;
     char enemy_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
+
+    Texture2D player_idle_texture;
 } Resources;
 
 static Resources RESOURCES;
 static World WORLD;
 
 static void init_resources(Resources *resources);
-static void init_world(World *world);
+static void init_world(World *world, Resources *resources);
 static void init_menu_commands(World *world);
 static void init_playing_commands(World *world);
 static void init_game_over_commands(World *world);
@@ -238,18 +257,23 @@ static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
 static void update_enemies_spawn(World *world, Resources *resources);
-static void update_commands(World *world);
+static void update_commands(World *world, Resources *resources);
 static void update_enemies(World *world);
 static void update_drops(World *world);
 static void update_player(World *world);
 static void update_camera(World *world);
+static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt);
 static void draw_world(World *world, Resources *resources);
 static void draw_text(
     Font font, const char *text, Vector2 position, const char *match_prompt
 );
+static void draw_animated_sprite(
+    AnimatedSprite animated_sprite, Transform transform, Resources *resources
+);
 static int sort_enemies(const void *enemy1, const void *enemy2);
 static float frand_01(void);
 static float frand_centered(void);
+static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -257,7 +281,7 @@ int main(void) {
     SetTargetFPS(60);
 
     init_resources(&RESOURCES);
-    init_world(&WORLD);
+    init_world(&WORLD, &RESOURCES);
 
     while (!WORLD.should_exit) {
         update_world(&WORLD, &RESOURCES);
@@ -266,6 +290,17 @@ int main(void) {
 }
 
 static void init_resources(Resources *resources) {
+    // -------------------------------------------------------------------
+    // init meshes and materials
+    resources->sprite_plane = GenMeshPlane(6.0, 6.0, 2, 2);
+    resources->sprite_material = LoadMaterialDefault();
+    resources->sprite_material.shader = load_shader(0, "sprite.frag");
+
+    // -------------------------------------------------------------------
+    // init sprites
+    resources->player_idle_texture = LoadTexture("./resources/sprites/player_idle.png");
+    SetTextureFilter(resources->player_idle_texture, TEXTURE_FILTER_BILINEAR);
+
     // -------------------------------------------------------------------
     // init fonts
     const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
@@ -295,7 +330,7 @@ static void init_resources(Resources *resources) {
     fclose(f);
 }
 
-static void init_world(World *world) {
+static void init_world(World *world, Resources *resources) {
     SetRandomSeed(time(NULL));
     memset(world, 0, sizeof(World));
 
@@ -310,6 +345,9 @@ static void init_world(World *world) {
     world->player.transform.translation = Vector3Zero();
     world->player.max_health = PLAYER_MAX_HEALTH;
     world->player.health = world->player.max_health;
+    world->player.animated_sprite = get_animated_sprite(
+        resources->player_idle_texture, true
+    );
 
     // -------------------------------------------------------------------
     // init camera
@@ -445,7 +483,7 @@ static void update_world(World *world, Resources *resources) {
     world->is_command_matched = false;
 
     update_prompt(world);
-    update_commands(world);
+    update_commands(world, resources);
     update_camera(world);
     update_enemies_spawn(world, resources);
     update_enemies(world);
@@ -541,7 +579,7 @@ static void update_enemies_spawn(World *world, Resources *resources) {
     world->enemies[world->n_enemies++] = enemy;
 }
 
-static void update_commands(World *world) {
+static void update_commands(World *world, Resources *resources) {
     float dt = world->dt;
     const char *submit_word = world->submit_word;
 
@@ -584,7 +622,7 @@ static void update_commands(World *world) {
                 strcpy(command->name, "pause");
                 world->state = STATE_PLAYING;
             } else if (command->type == COMMAND_RESTART_GAME) {
-                init_world(world);
+                init_world(world, resources);
             } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING && world->freeze_time <= EPSILON) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "unfreeze");
@@ -754,6 +792,9 @@ static void update_drops(World *world) {
 
 static void update_player(World *world) {
     Player *player = &world->player;
+
+    update_animated_sprite(&player->animated_sprite, world->dt);
+
     if (player->health <= 0.0) {
         world->state = STATE_GAME_OVER;
         init_game_over_commands(world);
@@ -822,6 +863,22 @@ static void update_camera(World *world) {
     }
 }
 
+static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt) {
+    animated_sprite->time += dt;
+    float frame_duration = 1.0 / animated_sprite->fps;
+    int n_steps = animated_sprite->time / frame_duration;
+    animated_sprite->time = fmodf(animated_sprite->time, frame_duration);
+    animated_sprite->frame_idx += n_steps;
+    if (animated_sprite->frame_idx >= animated_sprite->n_frames
+        && animated_sprite->is_repeat) {
+        animated_sprite->frame_idx %= animated_sprite->n_frames;
+    } else {
+        animated_sprite->frame_idx = min(
+            animated_sprite->frame_idx, animated_sprite->n_frames - 1
+        );
+    }
+}
+
 static void draw_world(World *world, Resources *resources) {
     BeginDrawing();
     ClearBackground(BLANK);
@@ -831,7 +888,9 @@ static void draw_world(World *world, Resources *resources) {
         BeginMode3D(world->camera);
 
         // draw player
-        DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
+        draw_animated_sprite(
+            world->player.animated_sprite, world->player.transform, resources
+        );
 
         // draw drops
         for (int i = 0; i < world->n_drops; ++i) {
@@ -1113,6 +1172,24 @@ static void draw_text(
     }
 }
 
+static void draw_animated_sprite(
+    AnimatedSprite animated_sprite, Transform transform, Resources *resources
+) {
+    int loc = GetShaderLocation(resources->sprite_material.shader, "src");
+
+    float x = animated_sprite.frame_idx * animated_sprite.frame_width;
+
+    float src[4] = {x, 0.0, animated_sprite.frame_width, animated_sprite.texture.height};
+    SetShaderValue(resources->sprite_material.shader, loc, src, SHADER_UNIFORM_VEC4);
+    resources->sprite_material.maps[0].texture = animated_sprite.texture;
+
+    rlPushMatrix();
+    rlTranslatef(transform.translation.x, transform.translation.y, 0.0);
+    rlRotatef(90.0, 1.0, 0.0, 0.0);
+    DrawMesh(resources->sprite_plane, resources->sprite_material, MatrixIdentity());
+    rlPopMatrix();
+}
+
 static int sort_enemies(const void *enemy1, const void *enemy2) {
     int n1 = ((Enemy *)enemy1)->n_matched_chars;
     int n2 = ((Enemy *)enemy2)->n_matched_chars;
@@ -1127,4 +1204,18 @@ static float frand_01(void) {
 
 static float frand_centered(void) {
     return (frand_01() * 2.0) - 1.0;
+}
+
+static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat) {
+    int frame_width = 32;
+    int fps = 10;
+
+    AnimatedSprite sprite = {0};
+    sprite.is_repeat = true;
+    sprite.texture = texture;
+    sprite.n_frames = texture.width / frame_width;
+    sprite.frame_width = frame_width;
+    sprite.fps = fps;
+
+    return sprite;
 }

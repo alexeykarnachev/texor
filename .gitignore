@@ -1,5 +1,6 @@
 TODO
 deps
+aseprite
 build
 bin/*
 !bin/*.c
