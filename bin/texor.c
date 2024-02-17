@@ -159,11 +159,17 @@ typedef struct AnimatedSprite {
     bool is_repeat;
 } AnimatedSprite;
 
+typedef enum PlayerState {
+    PLAYER_IDLE,
+    PLAYER_RUN,
+} PlayerState;
+
 typedef struct Player {
     Transform transform;
     float max_health;
     float health;
 
+    PlayerState state;
     AnimatedSprite animated_sprite;
 } Player;
 
@@ -243,6 +249,7 @@ typedef struct Resources {
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
     Texture2D player_idle_texture;
+    Texture2D player_run_texture;
 } Resources;
 
 static Resources RESOURCES;
@@ -260,7 +267,7 @@ static void update_enemies_spawn(World *world, Resources *resources);
 static void update_commands(World *world, Resources *resources);
 static void update_enemies(World *world);
 static void update_drops(World *world);
-static void update_player(World *world);
+static void update_player(World *world, Resources *resources);
 static void update_camera(World *world);
 static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt);
 static void draw_world(World *world, Resources *resources);
@@ -300,6 +307,9 @@ static void init_resources(Resources *resources) {
     // init sprites
     resources->player_idle_texture = LoadTexture("./resources/sprites/player_idle.png");
     SetTextureFilter(resources->player_idle_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->player_run_texture = LoadTexture("./resources/sprites/player_run.png");
+    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
     // init fonts
@@ -488,7 +498,7 @@ static void update_world(World *world, Resources *resources) {
     update_enemies_spawn(world, resources);
     update_enemies(world);
     update_drops(world);
-    update_player(world);
+    update_player(world, resources);
     world->shot.time += world->dt;
 
     if (world->state == STATE_PLAYING && world->submit_word[0] != '\0'
@@ -790,8 +800,9 @@ static void update_drops(World *world) {
     world->n_drops = n_alive_drops;
 }
 
-static void update_player(World *world) {
+static void update_player(World *world, Resources *resources) {
     Player *player = &world->player;
+    PlayerState state = player->state;
 
     update_animated_sprite(&player->animated_sprite, world->dt);
 
@@ -823,6 +834,9 @@ static void update_player(World *world) {
         player->transform.rotation = QuaternionFromVector3ToVector3(
             (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
         );
+        player->state = PLAYER_RUN;
+    } else {
+        player->state = PLAYER_IDLE;
     }
 
     if (world->state == STATE_PLAYING) {
@@ -846,6 +860,18 @@ static void update_player(World *world) {
     }
 
     world->player.health = Clamp(world->player.health, 0.0, PLAYER_MAX_HEALTH);
+
+    if (state != player->state) {
+        if (player->state == PLAYER_IDLE) {
+            world->player.animated_sprite = get_animated_sprite(
+                resources->player_idle_texture, true
+            );
+        } else if (player->state == PLAYER_RUN) {
+            world->player.animated_sprite = get_animated_sprite(
+                resources->player_run_texture, true
+            );
+        }
+    }
 }
 
 static void update_camera(World *world) {
