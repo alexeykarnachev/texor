@@ -19,13 +19,23 @@
 #define SCREEN_WIDTH 1024
 #define SCREEN_HEIGHT 768
 
-#define MAX_N_ENEMIES 32
+#define MAX_N_ENEMIES 5
 #define MAX_WORD_LEN 32
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
+// camera
+#define CAMERA_INIT_POSITION ((Vector3){-10.0, 0.0, 70.0})
+#define CAMERA_SHAKE_TIME 0.2
+
 // shot
 #define SHOT_TRACE_DURATION 0.08
+
+// drop
+#define MAX_N_DROPS 4
+#define DROP_PROBABILITY 0.5
+#define DROP_DURATION 30.0
+#define DROP_HEAL_VALUE 30.0
 
 #define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.3
@@ -65,6 +75,34 @@ typedef struct Shot {
     Vector3 start_position;
     Vector3 end_position;
 } Shot;
+
+typedef enum DropType {
+    DROP_HEAL,
+    DROP_REFRESH,
+    N_DROPS,
+} DropType;
+
+typedef struct Drop {
+    float time;
+    Vector3 position;
+
+    DropType type;
+
+    union {
+        struct {
+            float value;
+        } heal;
+
+        struct {
+        } refresh;
+    };
+} Drop;
+
+typedef struct CameraShake {
+    float duration;
+    float time;
+    float strength;
+} CameraShake;
 
 typedef enum CommandType {
     COMMAND_START_EASY,
@@ -145,6 +183,9 @@ typedef struct World {
     Player player;
     Shot shot;
 
+    int n_drops;
+    Drop drops[MAX_N_DROPS];
+
     int n_commands;
     Command commands[N_COMMANDS];
 
@@ -170,6 +211,7 @@ typedef struct World {
     int n_keystrokes_typed;  // in total
     Vector3 spawn_position;
     Camera3D camera;
+    CameraShake camera_shake;
     WorldState state;
 } World;
 
@@ -198,13 +240,16 @@ static void update_prompt(World *world);
 static void update_enemies_spawn(World *world, Resources *resources);
 static void update_commands(World *world);
 static void update_enemies(World *world);
+static void update_drops(World *world);
 static void update_player(World *world);
-static void update_free_orbit_camera(Camera3D *camera);
+static void update_camera(World *world);
 static void draw_world(World *world, Resources *resources);
 static void draw_text(
     Font font, const char *text, Vector2 position, const char *match_prompt
 );
 static int sort_enemies(const void *enemy1, const void *enemy2);
+static float frand_01(void);
+static float frand_centered(void);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -236,6 +281,7 @@ static void init_resources(Resources *resources) {
     while (fgets(resources->enemy_names[resources->n_enemy_names], MAX_WORD_LEN, f)) {
         char *name = resources->enemy_names[resources->n_enemy_names];
         name[strcspn(name, "\n")] = 0;
+
         if (++resources->n_enemy_names >= MAX_N_ENEMY_NAMES) break;
     }
     fclose(f);
@@ -267,11 +313,8 @@ static void init_world(World *world) {
 
     // -------------------------------------------------------------------
     // init camera
-    Vector3 player_position = world->player.transform.translation;
     world->camera.fovy = 60.0;
-    world->camera.position = player_position;
-    world->camera.position.z = 70.0;
-    world->camera.position.x -= 10.0;
+    world->camera.position = CAMERA_INIT_POSITION;
     world->camera.target = world->camera.position;
     world->camera.target.z -= 1.0;
     world->camera.up = (Vector3){0.0, 1.0, 0.0};
@@ -280,7 +323,6 @@ static void init_world(World *world) {
     // -------------------------------------------------------------------
     // init game parameters
     world->state = STATE_MENU;
-    // world->state = STATE_PLAYING;
     world->spawn_radius = 28.0;
     init_spawn_position(world);
 }
@@ -384,7 +426,7 @@ static void init_game_over_commands(World *world) {
 }
 
 static void init_spawn_position(World *world) {
-    float angle = ((float)GetRandomValue(0, RAND_MAX) / RAND_MAX) * 2 * PI;
+    float angle = frand_01() * 2 * PI;
     world->spawn_position = (Vector3){
         .x = world->spawn_radius * cos(angle),
         .y = world->spawn_radius * sin(angle),
@@ -404,13 +446,15 @@ static void update_world(World *world, Resources *resources) {
 
     update_prompt(world);
     update_commands(world);
-    update_free_orbit_camera(&world->camera);
+    update_camera(world);
     update_enemies_spawn(world, resources);
     update_enemies(world);
+    update_drops(world);
     update_player(world);
     world->shot.time += world->dt;
 
-    if (world->submit_word[0] != '\0' && !world->is_command_matched) {
+    if (world->state == STATE_PLAYING && world->submit_word[0] != '\0'
+        && !world->is_command_matched) {
         world->n_backspaces_typed += strlen(world->submit_word);
     }
 
@@ -421,13 +465,19 @@ static void update_prompt(World *world) {
     int prompt_len = strlen(world->prompt);
     int pressed_char = GetCharPressed();
     if (IsKeyPressed(KEY_ENTER) > 0) {
-        world->n_keystrokes_typed += strlen(world->prompt);
+        if (world->state == STATE_PLAYING) {
+            world->n_keystrokes_typed += strlen(world->prompt);
+        }
+
         strcpy(world->submit_word, world->prompt);
         world->prompt[0] = '\0';
     } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && prompt_len > 0) {
+        if (world->state == STATE_PLAYING) {
+            world->n_backspaces_typed += 1;
+            world->n_keystrokes_typed += 1;
+        }
+
         world->prompt[--prompt_len] = '\0';
-        world->n_backspaces_typed += 1;
-        world->n_keystrokes_typed += 1;
     } else if (prompt_len < MAX_WORD_LEN - 1 && isprint(pressed_char)) {
         world->prompt[prompt_len++] = pressed_char;
         world->prompt[prompt_len] = '\0';
@@ -435,7 +485,7 @@ static void update_prompt(World *world) {
 }
 
 static void update_enemies_spawn(World *world, Resources *resources) {
-    if (world->state != STATE_PLAYING) return;
+    if (world->state != STATE_PLAYING || world->n_enemies == MAX_N_ENEMIES) return;
 
     // don't update spawn_countdown if the world is frozen
     if (world->freeze_time <= EPSILON) {
@@ -446,7 +496,7 @@ static void update_enemies_spawn(World *world, Resources *resources) {
         }
     }
 
-    if (world->spawn_countdown > 0.0 || world->n_enemies == MAX_N_ENEMIES) return;
+    if (world->spawn_countdown > 0.0) return;
 
     // https://www.desmos.com/calculator/jp6dgyycwn
     world->spawn_period = fmaxf(
@@ -632,6 +682,10 @@ static void update_enemies(World *world) {
         if (can_attack) {
             enemy->recent_attack_time = world->time;
             world->player.health -= enemy->attack_strength;
+            world->camera_shake = (CameraShake
+            ){.time = 0.0,
+              .duration = CAMERA_SHAKE_TIME,
+              .strength = enemy->attack_strength};
         } else if (can_move) {
             Vector3 step = Vector3Scale(dir_to_player, enemy->speed * world->dt);
             enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
@@ -639,6 +693,8 @@ static void update_enemies(World *world) {
     }
 
     if (kill_enemy_idx != -1) {
+        Vector3 position = world->enemies[kill_enemy_idx].transform.translation;
+
         world->n_enemies -= 1;
         world->n_enemies_killed += 1;
         world->is_command_matched = true;
@@ -647,10 +703,53 @@ static void update_enemies(World *world) {
             &world->enemies[kill_enemy_idx + 1],
             sizeof(Enemy) * (world->n_enemies - kill_enemy_idx)
         );
+
+        float p = frand_01();
+        if (DROP_PROBABILITY >= p && world->n_drops < MAX_N_DROPS) {
+            int idx = GetRandomValue(0, N_DROPS - 1);
+            Drop drop = {0};
+            drop.position = position;
+            drop.time = DROP_DURATION;
+            if (idx == DROP_HEAL) {
+                drop.type = DROP_HEAL;
+                drop.heal.value = DROP_HEAL_VALUE;
+            } else if (idx == DROP_REFRESH) {
+                drop.type = DROP_REFRESH;
+            }
+            world->drops[world->n_drops++] = drop;
+        }
     }
 
     // sort enemies
     qsort(world->enemies, world->n_enemies, sizeof(Enemy), sort_enemies);
+}
+
+static void update_drops(World *world) {
+
+    Vector3 player_position = world->player.transform.translation;
+
+    int n_alive_drops = 0;
+    for (int i = 0; i < world->n_drops; ++i) {
+        Drop *drop = &world->drops[i];
+        drop->time -= world->dt;
+        if (drop->time > EPSILON) {
+            float dist = Vector3Distance(drop->position, player_position);
+            if (dist <= 2.0) {
+                if (drop->type == DROP_HEAL) {
+                    world->player.health += drop->heal.value;
+                } else if (drop->type == DROP_REFRESH) {
+                    for (int command_i = 0; command_i < world->n_commands; ++command_i) {
+                        Command *command = &world->commands[command_i];
+                        command->time = command->cooldown;
+                    }
+                }
+            } else {
+                world->drops[n_alive_drops++] = *drop;
+            }
+        }
+    }
+
+    world->n_drops = n_alive_drops;
 }
 
 static void update_player(World *world) {
@@ -685,6 +784,10 @@ static void update_player(World *world) {
         // damage player if submitted command doesn't exist
         if (world->submit_word[0] != '\0' && !world->is_command_matched) {
             world->player.health -= WRONG_COMMAND_DAMAGE;
+            world->camera_shake = (CameraShake
+            ){.time = 0.0,
+              .duration = CAMERA_SHAKE_TIME,
+              .strength = WRONG_COMMAND_DAMAGE};
         }
 
         // damage player if backspace is pressed
@@ -692,42 +795,31 @@ static void update_player(World *world) {
         if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE))
             && prompt_len > 0) {
             world->player.health -= BACKSPACE_DAMAGE;
+            world->camera_shake = (CameraShake
+            ){.time = 0.0, .duration = CAMERA_SHAKE_TIME, .strength = BACKSPACE_DAMAGE};
         }
     }
 
-    world->player.health = fmaxf(0.0, world->player.health);
+    world->player.health = Clamp(world->player.health, 0.0, PLAYER_MAX_HEALTH);
 }
 
-static void update_free_orbit_camera(Camera3D *camera) {
-    static float rot_speed = 0.003f;
-    static float move_speed = 0.01f;
-    static float zoom_speed = 1.0f;
+static void update_camera(World *world) {
+    Camera3D *camera = &world->camera;
+    CameraShake *shake = &world->camera_shake;
+    camera->position = CAMERA_INIT_POSITION;
 
-    bool is_mmb_down = IsMouseButtonDown(MOUSE_MIDDLE_BUTTON);
-    bool is_shift_down = IsKeyDown(KEY_LEFT_SHIFT);
-    float mouse_wheel_move = GetMouseWheelMove();
-    Vector2 mouse_delta = GetMouseDelta();
+    if (shake->time <= shake->duration && world->state == STATE_PLAYING) {
+        float x_shake = frand_centered();
+        float y_shake = frand_centered();
+        float k = shake->time / shake->duration;
+        x_shake *= k * shake->strength * 0.001;
+        y_shake *= k * shake->strength * 0.001;
 
-    if (is_mmb_down && is_shift_down) {
-        // Shift + MMB + mouse move -> change the camera position in the
-        // right-direction plane
-        CameraMoveRight(camera, -move_speed * mouse_delta.x, true);
+        camera->position.x += x_shake;
+        camera->position.y += y_shake;
 
-        Vector3 right = GetCameraRight(camera);
-        Vector3 up = Vector3CrossProduct(
-            Vector3Subtract(camera->position, camera->target), right
-        );
-        up = Vector3Scale(Vector3Normalize(up), move_speed * mouse_delta.y);
-        camera->position = Vector3Add(camera->position, up);
-        camera->target = Vector3Add(camera->target, up);
-    } else if (is_mmb_down) {
-        // Rotate the camera around the look-at point
-        CameraYaw(camera, -rot_speed * mouse_delta.x, true);
-        CameraPitch(camera, -rot_speed * mouse_delta.y, true, true, false);
+        shake->time += world->dt;
     }
-
-    // Bring camera closer (or move away), to the look-at point
-    CameraMoveToTarget(camera, -mouse_wheel_move * zoom_speed);
 }
 
 static void draw_world(World *world, Resources *resources) {
@@ -740,6 +832,28 @@ static void draw_world(World *world, Resources *resources) {
 
         // draw player
         DrawSphere(world->player.transform.translation, 1.0, RAYWHITE);
+
+        // draw drops
+        for (int i = 0; i < world->n_drops; ++i) {
+            Drop drop = world->drops[i];
+            Vector3 start = drop.position;
+            Vector3 end = start;
+            end.z += 2.0;
+            Color color;
+            if (drop.type == DROP_HEAL) {
+                color = MAGENTA;
+            } else if (drop.type == DROP_REFRESH) {
+                color = GREEN;
+            }
+
+            float r = 1.0 + (sinf(world->time * 4.0) + 1.0) * 0.5 * 0.25;
+
+            DrawCapsule(start, end, r, 16, 16, color);
+
+            start.z -= 1.0;
+            end.z += 1.0;
+            DrawCapsule(start, end, r * 1.5, 16, 16, ColorAlpha(color, 0.3));
+        }
 
         // draw enemies
         for (int i = 0; i < world->n_enemies; ++i) {
@@ -811,7 +925,7 @@ static void draw_world(World *world, Resources *resources) {
             DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
             // stats pane
-            rec = (Rectangle){2.0, 408.0, 200.0, 150.0};
+            rec = (Rectangle){2.0, 408.0, 200.0, 180.0};
             DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
             DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
@@ -851,6 +965,14 @@ static void draw_world(World *world, Resources *resources) {
         // draw stats
         // TODO: draw stats only on the STATE_GAME_OVER
         // if (world->state == STATE_GAME_OVER) {
+
+        float accuracy = 1.0;
+        int cpm = 0;
+        if (world->n_keystrokes_typed > 0) {
+            accuracy = 1.0 - (float)world->n_backspaces_typed / world->n_keystrokes_typed;
+            cpm = accuracy * world->n_keystrokes_typed * 60.0 / world->time;
+        }
+
         int y = 448;
         draw_text(
             resources->stats_font,
@@ -877,11 +999,13 @@ static void draw_world(World *world, Resources *resources) {
 
         y += resources->stats_font.baseSize;
         draw_text(
+            resources->stats_font, TextFormat("CPM: %d", cpm), (Vector2){8.0, y}, 0
+        );
+
+        y += resources->stats_font.baseSize;
+        draw_text(
             resources->stats_font,
-            TextFormat(
-                "Accuracy: %.2f",
-                1.0 - (float)world->n_backspaces_typed / world->n_keystrokes_typed
-            ),
+            TextFormat("Accuracy: %.2f", accuracy),
             (Vector2){8.0, y},
             0
         );
@@ -995,4 +1119,12 @@ static int sort_enemies(const void *enemy1, const void *enemy2) {
     if (n1 > n2) return 1;
     else if (n1 < n2) return -1;
     else return 0;
+}
+
+static float frand_01(void) {
+    return ((float)GetRandomValue(0, RAND_MAX) / RAND_MAX);
+}
+
+static float frand_centered(void) {
+    return (frand_01() * 2.0) - 1.0;
 }
