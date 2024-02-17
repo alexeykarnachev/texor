@@ -804,12 +804,20 @@ static void update_player(World *world, Resources *resources) {
     Player *player = &world->player;
     PlayerState state = player->state;
 
-    update_animated_sprite(&player->animated_sprite, world->dt);
-
     if (player->health <= 0.0) {
         world->state = STATE_GAME_OVER;
         init_game_over_commands(world);
         return;
+    }
+
+    bool is_shot = world->shot.time == 0.0 && world->shot.trace_duration > 0.0;
+    if (is_shot) {
+        Vector3 dir = Vector3Normalize(
+            Vector3Subtract(world->shot.end_position, world->shot.start_position)
+        );
+        player->transform.rotation = QuaternionFromVector3ToVector3(
+            (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
+        );
     }
 
     Vector2 dir = Vector2Zero();
@@ -872,6 +880,8 @@ static void update_player(World *world, Resources *resources) {
             );
         }
     }
+
+    update_animated_sprite(&player->animated_sprite, world->dt);
 }
 
 static void update_camera(World *world) {
