@@ -164,6 +164,7 @@ typedef enum PlayerState {
     PLAYER_RUN,
     PLAYER_SHOOT,
     PLAYER_HURT,
+    PLAYER_DEATH,
 } PlayerState;
 
 typedef struct Player {
@@ -172,6 +173,7 @@ typedef struct Player {
     float health;
 
     PlayerState state;
+    PlayerState next_state;
     AnimatedSprite animated_sprite;
 } Player;
 
@@ -254,6 +256,7 @@ typedef struct Resources {
     Texture2D player_run_texture;
     Texture2D player_shoot_texture;
     Texture2D player_hurt_texture;
+    Texture2D player_death_texture;
 } Resources;
 
 static Resources RESOURCES;
@@ -320,6 +323,9 @@ static void init_resources(Resources *resources) {
     SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     resources->player_hurt_texture = LoadTexture("./resources/sprites/player_hurt.png");
+    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->player_death_texture = LoadTexture("./resources/sprites/player_death.png");
     SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
@@ -741,10 +747,7 @@ static void update_enemies(World *world, Resources *resources) {
         if (can_attack) {
             enemy->recent_attack_time = world->time;
             world->player.health -= enemy->attack_strength;
-            world->player.animated_sprite = get_animated_sprite(
-                resources->player_hurt_texture, false
-            );
-            world->player.state = PLAYER_HURT;
+            world->player.next_state = PLAYER_HURT;
             world->camera_shake = (CameraShake
             ){.time = 0.0,
               .duration = CAMERA_SHAKE_TIME,
@@ -817,11 +820,42 @@ static void update_drops(World *world) {
 
 static void update_player(World *world, Resources *resources) {
     Player *player = &world->player;
-    PlayerState state = player->state;
+    update_animated_sprite(&player->animated_sprite, world->dt);
+
+    // -------------------------------------------------------------------
+    // apply player next state
+    if (player->state != player->next_state) {
+        player->state = player->next_state;
+        if (player->state == PLAYER_IDLE) {
+            player->animated_sprite = get_animated_sprite(
+                resources->player_idle_texture, true
+            );
+        } else if (player->state == PLAYER_RUN) {
+            player->animated_sprite = get_animated_sprite(
+                resources->player_run_texture, true
+            );
+        } else if (player->state == PLAYER_SHOOT) {
+            player->animated_sprite = get_animated_sprite(
+                resources->player_shoot_texture, false
+            );
+        } else if (player->state == PLAYER_HURT) {
+            player->animated_sprite = get_animated_sprite(
+                resources->player_hurt_texture, false
+            );
+        } else if (player->state == PLAYER_DEATH) {
+            player->animated_sprite = get_animated_sprite(
+                resources->player_death_texture, false
+            );
+        }
+    }
 
     if (player->health <= 0.0) {
-        world->state = STATE_GAME_OVER;
-        init_game_over_commands(world);
+        if (player->state != PLAYER_DEATH) {
+            player->next_state = PLAYER_DEATH;
+        } else if (is_animated_sprite_finished(player->animated_sprite)) {
+            world->state = STATE_GAME_OVER;
+            init_game_over_commands(world);
+        }
         return;
     }
 
@@ -833,11 +867,7 @@ static void update_player(World *world, Resources *resources) {
         player->transform.rotation = QuaternionFromVector3ToVector3(
             (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
         );
-        player->state = PLAYER_SHOOT;
-    }
-
-    if (is_animated_sprite_finished(player->animated_sprite)) {
-        player->state = PLAYER_IDLE;
+        player->next_state = PLAYER_SHOOT;
     }
 
     Vector2 dir = Vector2Zero();
@@ -862,9 +892,9 @@ static void update_player(World *world, Resources *resources) {
         player->transform.rotation = QuaternionFromVector3ToVector3(
             (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
         );
-        player->state = PLAYER_RUN;
+        player->next_state = PLAYER_RUN;
     } else if (player->state == PLAYER_RUN) {
-        player->state = PLAYER_IDLE;
+        player->next_state = PLAYER_IDLE;
     }
 
     if (world->state == STATE_PLAYING) {
@@ -875,10 +905,7 @@ static void update_player(World *world, Resources *resources) {
             ){.time = 0.0,
               .duration = CAMERA_SHAKE_TIME,
               .strength = WRONG_COMMAND_DAMAGE};
-            player->animated_sprite = get_animated_sprite(
-                resources->player_hurt_texture, false
-            );
-            player->state = PLAYER_HURT;
+            player->next_state = PLAYER_HURT;
         }
 
         // damage player if backspace is pressed
@@ -893,22 +920,8 @@ static void update_player(World *world, Resources *resources) {
 
     world->player.health = Clamp(world->player.health, 0.0, PLAYER_MAX_HEALTH);
 
-    update_animated_sprite(&player->animated_sprite, world->dt);
-
-    if (state != player->state) {
-        if (player->state == PLAYER_IDLE) {
-            player->animated_sprite = get_animated_sprite(
-                resources->player_idle_texture, true
-            );
-        } else if (player->state == PLAYER_RUN) {
-            player->animated_sprite = get_animated_sprite(
-                resources->player_run_texture, true
-            );
-        } else if (player->state == PLAYER_SHOOT) {
-            player->animated_sprite = get_animated_sprite(
-                resources->player_shoot_texture, false
-            );
-        }
+    if (is_animated_sprite_finished(player->animated_sprite)) {
+        player->next_state = PLAYER_IDLE;
     }
 }
 
