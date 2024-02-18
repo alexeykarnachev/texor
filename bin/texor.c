@@ -38,6 +38,7 @@
 #define DROP_DURATION 30.0
 #define DROP_HEAL_VALUE 30.0
 
+#define SPAWN_RADIUS 35.0
 #define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.3
 #define MAX_ENEMY_SPEED_FACTOR 1.1
@@ -255,6 +256,8 @@ typedef struct Resources {
     Font command_font;
     Font stats_font;
 
+    Shader ground_shader;
+
     Mesh sprite_plane;
     Material sprite_material;
 
@@ -328,6 +331,7 @@ static void init_resources(Resources *resources) {
     resources->sprite_plane = GenMeshPlane(6.0, 6.0, 2, 2);
     resources->sprite_material = LoadMaterialDefault();
     resources->sprite_material.shader = load_shader(0, "sprite.frag");
+    resources->ground_shader = load_shader(0, "ground.frag");
 
     // -------------------------------------------------------------------
     // init sprites
@@ -424,7 +428,7 @@ static void init_world(World *world, Resources *resources) {
     // -------------------------------------------------------------------
     // init game parameters
     world->state = STATE_MENU;
-    world->spawn_radius = 28.0;
+    world->spawn_radius = SPAWN_RADIUS;
     init_spawn_position(world);
 }
 
@@ -998,8 +1002,6 @@ static void update_player(World *world, Resources *resources) {
         if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE))
             && prompt_len > 0) {
             world->player.health -= BACKSPACE_DAMAGE;
-            world->camera_shake = (CameraShake
-            ){.time = 0.0, .duration = CAMERA_SHAKE_TIME, .strength = BACKSPACE_DAMAGE};
         }
     }
 
@@ -1045,11 +1047,37 @@ static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt) {
 
 static void draw_world(World *world, Resources *resources) {
     BeginDrawing();
-    ClearBackground((Color){20, 55, 20, 255});
+    ClearBackground(BLANK);
 
     // scene
     if (world->state > STATE_MENU) {
         BeginMode3D(world->camera);
+
+        // draw arena boundary
+        float light_pos[2] = {
+            world->player.transform.translation.x, world->player.transform.translation.y};
+        SetShaderValue(
+            resources->ground_shader,
+            GetShaderLocation(resources->ground_shader, "u_light_pos"),
+            light_pos,
+            SHADER_UNIFORM_VEC2
+        );
+        SetShaderValue(
+            resources->ground_shader,
+            GetShaderLocation(resources->ground_shader, "u_radius"),
+            &world->spawn_radius,
+            SHADER_UNIFORM_FLOAT
+        );
+        BeginShaderMode(resources->ground_shader);
+        DrawCylinderEx(
+            (Vector3){0.0, 0.0, -1.0},
+            (Vector3){0.0, 0.0, -0.1},
+            world->spawn_radius,
+            world->spawn_radius,
+            64,
+            WHITE
+        );
+        EndShaderMode();
 
         // draw player
         draw_animated_sprite(
@@ -1081,21 +1109,14 @@ static void draw_world(World *world, Resources *resources) {
         // draw enemies
         for (int i = 0; i < world->n_enemies; ++i) {
             Enemy enemy = world->enemies[i];
-            draw_animated_sprite(enemy.animated_sprite, enemy.transform, resources);
+            if (Vector3Length(enemy.transform.translation) <= world->spawn_radius) {
+                draw_animated_sprite(enemy.animated_sprite, enemy.transform, resources);
+            }
         }
 
         // draw next spawn enemy ghost
-        float alpha = 1.0 - world->spawn_countdown / BASE_SPAWN_PERIOD;
-        DrawSphere(world->spawn_position, 1.0, ColorAlpha(RED, alpha));
-
-        // draw arena boundary
-        DrawCircle3D(
-            Vector3Zero(),
-            world->spawn_radius,
-            (Vector3){0.0, 0.0, 1.0},
-            0.0,
-            UI_OUTLINE_COLOR
-        );
+        // float alpha = 1.0 - world->spawn_countdown / BASE_SPAWN_PERIOD;
+        // DrawSphere(world->spawn_position, 1.0, ColorAlpha(RED, alpha));
 
         // draw shot
         Shot *shot = &world->shot;
@@ -1104,7 +1125,7 @@ static void draw_world(World *world, Resources *resources) {
             Vector3 b = shot->end_position;
             Vector3 d = Vector3Normalize(Vector3Subtract(b, a));
             a = Vector3Add(a, Vector3Scale(d, 2.0));
-            alpha = 1.0 - shot->time / shot->trace_duration;
+            float alpha = 1.0 - shot->time / shot->trace_duration;
             Color color = {255, 240, 50};
             DrawCylinderEx(a, b, 0.2, 0.4, 8, ColorAlpha(color, alpha));
         }
@@ -1115,7 +1136,9 @@ static void draw_world(World *world, Resources *resources) {
             // draw enemy names
             for (int i = 0; i < world->n_enemies; ++i) {
                 Enemy enemy = world->enemies[i];
-                if (enemy.state == ENEMY_EXPLODE) continue;
+                if (enemy.state == ENEMY_EXPLODE
+                    || Vector3Length(enemy.transform.translation) > world->spawn_radius)
+                    continue;
 
                 Vector2 screen_pos = GetWorldToScreen(
                     enemy.transform.translation, world->camera
