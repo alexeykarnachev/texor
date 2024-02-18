@@ -177,6 +177,12 @@ typedef struct Player {
     AnimatedSprite animated_sprite;
 } Player;
 
+typedef enum EnemyState {
+    ENEMY_IDLE,
+    ENEMY_RUN,
+    ENEMY_ATTACK,
+} EnemyState;
+
 typedef struct Enemy {
     Transform transform;
     float speed;
@@ -191,6 +197,10 @@ typedef struct Enemy {
         float deceleration;
         Vector3 direction;
     } impulse;
+
+    EnemyState state;
+    EnemyState next_state;
+    AnimatedSprite animated_sprite;
 
     // for sorting
     int n_matched_chars;
@@ -257,6 +267,10 @@ typedef struct Resources {
     Texture2D player_shoot_texture;
     Texture2D player_hurt_texture;
     Texture2D player_death_texture;
+
+    Texture2D enemy_idle_texture;
+    Texture2D enemy_run_texture;
+    Texture2D enemy_attack_texture;
 } Resources;
 
 static Resources RESOURCES;
@@ -313,6 +327,7 @@ static void init_resources(Resources *resources) {
 
     // -------------------------------------------------------------------
     // init sprites
+    // player
     resources->player_idle_texture = LoadTexture("./resources/sprites/player_idle.png");
     SetTextureFilter(resources->player_idle_texture, TEXTURE_FILTER_BILINEAR);
 
@@ -320,13 +335,23 @@ static void init_resources(Resources *resources) {
     SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     resources->player_shoot_texture = LoadTexture("./resources/sprites/player_shoot.png");
-    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(resources->player_shoot_texture, TEXTURE_FILTER_BILINEAR);
 
     resources->player_hurt_texture = LoadTexture("./resources/sprites/player_hurt.png");
-    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(resources->player_hurt_texture, TEXTURE_FILTER_BILINEAR);
 
     resources->player_death_texture = LoadTexture("./resources/sprites/player_death.png");
-    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(resources->player_death_texture, TEXTURE_FILTER_BILINEAR);
+
+    // enemy
+    resources->enemy_idle_texture = LoadTexture("./resources/sprites/player_idle.png");
+    SetTextureFilter(resources->enemy_idle_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->enemy_run_texture = LoadTexture("./resources/sprites/player_run.png");
+    SetTextureFilter(resources->enemy_run_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->enemy_attack_texture = LoadTexture("./resources/sprites/player_shoot.png");
+    SetTextureFilter(resources->enemy_attack_texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
     // init fonts
@@ -594,6 +619,7 @@ static void update_enemies_spawn(World *world, Resources *resources) {
         .attack_radius = 2.0,
         .attack_cooldown = 1.0,
         .recent_attack_time = 0.0,
+        .animated_sprite = get_animated_sprite(resources->enemy_run_texture, true),
     };
 
     if (++world->n_enemies_spawned % BOSS_SPAWN_PERIOD == 0) {
@@ -699,6 +725,24 @@ static void update_enemies(World *world, Resources *resources) {
 
     for (int i = 0; i < world->n_enemies; ++i) {
         Enemy *enemy = &world->enemies[i];
+        update_animated_sprite(&enemy->animated_sprite, world->dt);
+
+        if (enemy->state != enemy->next_state) {
+            enemy->state = enemy->next_state;
+            if (enemy->state == ENEMY_IDLE) {
+                enemy->animated_sprite = get_animated_sprite(
+                    resources->enemy_idle_texture, true
+                );
+            } else if (enemy->state == ENEMY_RUN) {
+                enemy->animated_sprite = get_animated_sprite(
+                    resources->enemy_run_texture, true
+                );
+            } else if (enemy->state == ENEMY_ATTACK) {
+                enemy->animated_sprite = get_animated_sprite(
+                    resources->enemy_attack_texture, false
+                );
+            }
+        }
 
         // count number of matched chars with prompt
         enemy->n_matched_chars = 0;
@@ -740,11 +784,11 @@ static void update_enemies(World *world, Resources *resources) {
 
         // apply enemy movements and attacks
         enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
-        Vector3 dir_to_player = Vector3Subtract(
+        Vector3 dir = Vector3Subtract(
             world->player.transform.translation, enemy->transform.translation
         );
-        float dist_to_player = Vector3Length(dir_to_player);
-        dir_to_player = Vector3Normalize(dir_to_player);
+        float dist_to_player = Vector3Length(dir);
+        dir = Vector3Normalize(dir);
         float time_since_last_attack = world->time - enemy->recent_attack_time;
         can_attack &= dist_to_player < enemy->attack_radius
                       && time_since_last_attack > enemy->attack_cooldown;
@@ -758,10 +802,18 @@ static void update_enemies(World *world, Resources *resources) {
             ){.time = 0.0,
               .duration = CAMERA_SHAKE_TIME,
               .strength = enemy->attack_strength};
+            enemy->next_state = ENEMY_ATTACK;
         } else if (can_move) {
-            Vector3 step = Vector3Scale(dir_to_player, enemy->speed * world->dt);
+            Vector3 step = Vector3Scale(dir, enemy->speed * world->dt);
             enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
+            enemy->next_state = ENEMY_RUN;
+        } else if (enemy->state == ENEMY_ATTACK && is_animated_sprite_finished(enemy->animated_sprite)) {
+            enemy->next_state = ENEMY_IDLE;
         }
+
+        enemy->transform.rotation = QuaternionFromVector3ToVector3(
+            (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
+        );
     }
 
     if (kill_enemy_idx != -1) {
@@ -1002,8 +1054,7 @@ static void draw_world(World *world, Resources *resources) {
         // draw enemies
         for (int i = 0; i < world->n_enemies; ++i) {
             Enemy enemy = world->enemies[i];
-            Color color = world->freeze_time >= EPSILON ? BLUE : RED;
-            DrawSphere(enemy.transform.translation, 1.0, color);
+            draw_animated_sprite(enemy.animated_sprite, enemy.transform, resources);
         }
 
         // draw next spawn enemy ghost
