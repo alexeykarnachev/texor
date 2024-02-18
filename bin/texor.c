@@ -162,6 +162,7 @@ typedef struct AnimatedSprite {
 typedef enum PlayerState {
     PLAYER_IDLE,
     PLAYER_RUN,
+    PLAYER_SHOOT,
 } PlayerState;
 
 typedef struct Player {
@@ -250,6 +251,7 @@ typedef struct Resources {
 
     Texture2D player_idle_texture;
     Texture2D player_run_texture;
+    Texture2D player_shoot_texture;
 } Resources;
 
 static Resources RESOURCES;
@@ -281,6 +283,7 @@ static int sort_enemies(const void *enemy1, const void *enemy2);
 static float frand_01(void);
 static float frand_centered(void);
 static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat);
+static bool is_animated_sprite_finished(AnimatedSprite animated_sprite);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -309,6 +312,9 @@ static void init_resources(Resources *resources) {
     SetTextureFilter(resources->player_idle_texture, TEXTURE_FILTER_BILINEAR);
 
     resources->player_run_texture = LoadTexture("./resources/sprites/player_run.png");
+    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->player_shoot_texture = LoadTexture("./resources/sprites/player_shoot.png");
     SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
@@ -810,14 +816,21 @@ static void update_player(World *world, Resources *resources) {
         return;
     }
 
-    bool is_shot = world->shot.time == 0.0 && world->shot.trace_duration > 0.0;
-    if (is_shot) {
+    bool is_just_shot = world->shot.time == 0.0 && world->shot.trace_duration > 0.0;
+    if (is_just_shot) {
         Vector3 dir = Vector3Normalize(
             Vector3Subtract(world->shot.end_position, world->shot.start_position)
         );
         player->transform.rotation = QuaternionFromVector3ToVector3(
             (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
         );
+        player->state = PLAYER_SHOOT;
+    }
+
+    if (player->state == PLAYER_SHOOT) {
+        if (is_animated_sprite_finished(player->animated_sprite)) {
+            player->state = PLAYER_IDLE;
+        }
     }
 
     Vector2 dir = Vector2Zero();
@@ -843,7 +856,7 @@ static void update_player(World *world, Resources *resources) {
             (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
         );
         player->state = PLAYER_RUN;
-    } else {
+    } else if (player->state == PLAYER_RUN) {
         player->state = PLAYER_IDLE;
     }
 
@@ -869,19 +882,23 @@ static void update_player(World *world, Resources *resources) {
 
     world->player.health = Clamp(world->player.health, 0.0, PLAYER_MAX_HEALTH);
 
+    update_animated_sprite(&player->animated_sprite, world->dt);
+
     if (state != player->state) {
         if (player->state == PLAYER_IDLE) {
-            world->player.animated_sprite = get_animated_sprite(
+            player->animated_sprite = get_animated_sprite(
                 resources->player_idle_texture, true
             );
         } else if (player->state == PLAYER_RUN) {
-            world->player.animated_sprite = get_animated_sprite(
+            player->animated_sprite = get_animated_sprite(
                 resources->player_run_texture, true
+            );
+        } else if (player->state == PLAYER_SHOOT) {
+            player->animated_sprite = get_animated_sprite(
+                resources->player_shoot_texture, false
             );
         }
     }
-
-    update_animated_sprite(&player->animated_sprite, world->dt);
 }
 
 static void update_camera(World *world) {
@@ -906,9 +923,7 @@ static void update_camera(World *world) {
 static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt) {
     animated_sprite->time += dt;
     float frame_duration = 1.0 / animated_sprite->fps;
-    int n_steps = animated_sprite->time / frame_duration;
-    animated_sprite->time = fmodf(animated_sprite->time, frame_duration);
-    animated_sprite->frame_idx += n_steps;
+    animated_sprite->frame_idx = animated_sprite->time / frame_duration;
     if (animated_sprite->frame_idx >= animated_sprite->n_frames
         && animated_sprite->is_repeat) {
         animated_sprite->frame_idx %= animated_sprite->n_frames;
@@ -1256,11 +1271,18 @@ static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat) {
     int fps = 10;
 
     AnimatedSprite sprite = {0};
-    sprite.is_repeat = true;
+    sprite.is_repeat = is_repeat;
     sprite.texture = texture;
     sprite.n_frames = texture.width / frame_width;
     sprite.frame_width = frame_width;
     sprite.fps = fps;
 
     return sprite;
+}
+
+static bool is_animated_sprite_finished(AnimatedSprite animated_sprite) {
+    if (animated_sprite.is_repeat) return false;
+    float frame_duration = 1.0 / animated_sprite.fps;
+    float total_duration = frame_duration * animated_sprite.n_frames;
+    return animated_sprite.time >= total_duration;
 }
