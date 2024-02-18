@@ -181,6 +181,8 @@ typedef enum EnemyState {
     ENEMY_IDLE,
     ENEMY_RUN,
     ENEMY_ATTACK,
+    ENEMY_FREEZE,
+    ENEMY_EXPLODE,
 } EnemyState;
 
 typedef struct Enemy {
@@ -271,6 +273,8 @@ typedef struct Resources {
     Texture2D enemy_idle_texture;
     Texture2D enemy_run_texture;
     Texture2D enemy_attack_texture;
+    Texture2D enemy_freeze_texture;
+    Texture2D enemy_explode_texture;
 } Resources;
 
 static Resources RESOURCES;
@@ -344,14 +348,21 @@ static void init_resources(Resources *resources) {
     SetTextureFilter(resources->player_death_texture, TEXTURE_FILTER_BILINEAR);
 
     // enemy
-    resources->enemy_idle_texture = LoadTexture("./resources/sprites/player_idle.png");
+    resources->enemy_idle_texture = LoadTexture("./resources/sprites/enemy_idle.png");
     SetTextureFilter(resources->enemy_idle_texture, TEXTURE_FILTER_BILINEAR);
 
-    resources->enemy_run_texture = LoadTexture("./resources/sprites/player_run.png");
+    resources->enemy_run_texture = LoadTexture("./resources/sprites/enemy_run.png");
     SetTextureFilter(resources->enemy_run_texture, TEXTURE_FILTER_BILINEAR);
 
-    resources->enemy_attack_texture = LoadTexture("./resources/sprites/player_shoot.png");
+    resources->enemy_attack_texture = LoadTexture("./resources/sprites/enemy_attack.png");
     SetTextureFilter(resources->enemy_attack_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->enemy_freeze_texture = LoadTexture("./resources/sprites/enemy_freeze.png");
+    SetTextureFilter(resources->enemy_freeze_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->enemy_explode_texture = LoadTexture("./resources/sprites/enemy_explode.png"
+    );
+    SetTextureFilter(resources->enemy_explode_texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
     // init fonts
@@ -741,6 +752,14 @@ static void update_enemies(World *world, Resources *resources) {
                 enemy->animated_sprite = get_animated_sprite(
                     resources->enemy_attack_texture, false
                 );
+            } else if (enemy->state == ENEMY_FREEZE) {
+                enemy->animated_sprite = get_animated_sprite(
+                    resources->enemy_freeze_texture, true
+                );
+            } else if (enemy->state == ENEMY_EXPLODE) {
+                enemy->animated_sprite = get_animated_sprite(
+                    resources->enemy_explode_texture, false
+                );
             }
         }
 
@@ -760,7 +779,20 @@ static void update_enemies(World *world, Resources *resources) {
               .trace_duration = SHOT_TRACE_DURATION,
               .start_position = world->player.transform.translation,
               .end_position = enemy->transform.translation};
-            kill_enemy_idx = i;
+            enemy->next_state = ENEMY_EXPLODE;
+            world->is_command_matched = true;
+            continue;
+        }
+
+        if (enemy->state == ENEMY_EXPLODE) {
+            if (is_animated_sprite_finished(enemy->animated_sprite)) {
+                kill_enemy_idx = i;
+            }
+            continue;
+        }
+
+        if (world->freeze_time > EPSILON) {
+            enemy->next_state = ENEMY_FREEZE;
             continue;
         }
 
@@ -769,7 +801,7 @@ static void update_enemies(World *world, Resources *resources) {
         bool can_attack = true;
         Vector3 step = {0};
 
-        if (world->freeze_time >= EPSILON) {
+        if (enemy->state == ENEMY_EXPLODE || world->freeze_time >= EPSILON) {
             can_move = false;
             can_attack = false;
         }
@@ -811,9 +843,11 @@ static void update_enemies(World *world, Resources *resources) {
             enemy->next_state = ENEMY_IDLE;
         }
 
-        enemy->transform.rotation = QuaternionFromVector3ToVector3(
-            (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
-        );
+        if (can_attack || can_move) {
+            enemy->transform.rotation = QuaternionFromVector3ToVector3(
+                (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
+            );
+        }
     }
 
     if (kill_enemy_idx != -1) {
@@ -821,7 +855,6 @@ static void update_enemies(World *world, Resources *resources) {
 
         world->n_enemies -= 1;
         world->n_enemies_killed += 1;
-        world->is_command_matched = true;
         memmove(
             &world->enemies[kill_enemy_idx],
             &world->enemies[kill_enemy_idx + 1],
