@@ -163,6 +163,7 @@ typedef enum PlayerState {
     PLAYER_IDLE,
     PLAYER_RUN,
     PLAYER_SHOOT,
+    PLAYER_HURT,
 } PlayerState;
 
 typedef struct Player {
@@ -252,6 +253,7 @@ typedef struct Resources {
     Texture2D player_idle_texture;
     Texture2D player_run_texture;
     Texture2D player_shoot_texture;
+    Texture2D player_hurt_texture;
 } Resources;
 
 static Resources RESOURCES;
@@ -267,7 +269,7 @@ static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
 static void update_enemies_spawn(World *world, Resources *resources);
 static void update_commands(World *world, Resources *resources);
-static void update_enemies(World *world);
+static void update_enemies(World *world, Resources *resources);
 static void update_drops(World *world);
 static void update_player(World *world, Resources *resources);
 static void update_camera(World *world);
@@ -315,6 +317,9 @@ static void init_resources(Resources *resources) {
     SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     resources->player_shoot_texture = LoadTexture("./resources/sprites/player_shoot.png");
+    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
+
+    resources->player_hurt_texture = LoadTexture("./resources/sprites/player_hurt.png");
     SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
 
     // -------------------------------------------------------------------
@@ -502,7 +507,7 @@ static void update_world(World *world, Resources *resources) {
     update_commands(world, resources);
     update_camera(world);
     update_enemies_spawn(world, resources);
-    update_enemies(world);
+    update_enemies(world, resources);
     update_drops(world);
     update_player(world, resources);
     world->shot.time += world->dt;
@@ -674,7 +679,7 @@ static void update_commands(World *world, Resources *resources) {
     }
 }
 
-static void update_enemies(World *world) {
+static void update_enemies(World *world, Resources *resources) {
     if (world->state != STATE_PLAYING) return;
 
     const char *submit_word = world->submit_word;
@@ -736,6 +741,10 @@ static void update_enemies(World *world) {
         if (can_attack) {
             enemy->recent_attack_time = world->time;
             world->player.health -= enemy->attack_strength;
+            world->player.animated_sprite = get_animated_sprite(
+                resources->player_hurt_texture, false
+            );
+            world->player.state = PLAYER_HURT;
             world->camera_shake = (CameraShake
             ){.time = 0.0,
               .duration = CAMERA_SHAKE_TIME,
@@ -827,10 +836,8 @@ static void update_player(World *world, Resources *resources) {
         player->state = PLAYER_SHOOT;
     }
 
-    if (player->state == PLAYER_SHOOT) {
-        if (is_animated_sprite_finished(player->animated_sprite)) {
-            player->state = PLAYER_IDLE;
-        }
+    if (is_animated_sprite_finished(player->animated_sprite)) {
+        player->state = PLAYER_IDLE;
     }
 
     Vector2 dir = Vector2Zero();
@@ -868,6 +875,10 @@ static void update_player(World *world, Resources *resources) {
             ){.time = 0.0,
               .duration = CAMERA_SHAKE_TIME,
               .strength = WRONG_COMMAND_DAMAGE};
+            player->animated_sprite = get_animated_sprite(
+                resources->player_hurt_texture, false
+            );
+            player->state = PLAYER_HURT;
         }
 
         // damage player if backspace is pressed
