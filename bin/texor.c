@@ -792,21 +792,9 @@ static void update_enemies(World *world, Resources *resources) {
             continue;
         }
 
-        if (world->freeze_time > EPSILON) {
-            enemy->next_state = ENEMY_FREEZE;
-            continue;
-        }
-
-        // update enemy effects
         bool can_move = true;
         bool can_attack = true;
         Vector3 step = {0};
-
-        if (enemy->state == ENEMY_EXPLODE || world->freeze_time >= EPSILON) {
-            can_move = false;
-            can_attack = false;
-        }
-
         if (enemy->impulse.speed > 0.0) {
             Vector3 dir = Vector3Normalize(enemy->impulse.direction);
             step = Vector3Scale(dir, enemy->impulse.speed * world->dt);
@@ -814,9 +802,14 @@ static void update_enemies(World *world, Resources *resources) {
             can_move = false;
             can_attack = false;
         }
+        enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
+
+        if (world->freeze_time > EPSILON) {
+            enemy->next_state = ENEMY_FREEZE;
+            continue;
+        }
 
         // apply enemy movements and attacks
-        enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
         Vector3 dir = Vector3Subtract(
             world->player.transform.translation, enemy->transform.translation
         );
