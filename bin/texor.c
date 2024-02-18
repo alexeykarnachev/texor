@@ -39,7 +39,8 @@
 #define DROP_HEAL_VALUE 30.0
 
 #define SPAWN_RADIUS 35.0
-#define BASE_SPAWN_PERIOD 5.0
+// #define BASE_SPAWN_PERIOD 5.0
+#define BASE_SPAWN_PERIOD 0.1
 #define BASE_ENEMY_SPEED_FACTOR 0.3
 #define MAX_ENEMY_SPEED_FACTOR 1.1
 #define BOSS_SPAWN_PERIOD 10  // in number of enemies
@@ -129,6 +130,8 @@ typedef struct Command {
     bool show_separator;
     bool show_cooldown;
     char name[MAX_WORD_LEN];
+
+    Texture2D icon_texture;
 
     CommandType type;
 
@@ -267,6 +270,13 @@ typedef struct Resources {
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
+    Texture2D pause_icon_texture;
+    Texture2D cryonics_icon_texture;
+    Texture2D repulse_icon_texture;
+    Texture2D decay_icon_texture;
+    Texture2D health_icon_texture;
+    Texture2D enemy_icon_texture;
+
     Texture2D player_idle_texture;
     Texture2D player_run_texture;
     Texture2D player_shoot_texture;
@@ -286,7 +296,7 @@ static World WORLD;
 static void init_resources(Resources *resources);
 static void init_world(World *world, Resources *resources);
 static void init_menu_commands(World *world);
-static void init_playing_commands(World *world);
+static void init_playing_commands(World *world, Resources *resources);
 static void init_game_over_commands(World *world);
 static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
@@ -302,9 +312,12 @@ static void draw_world(World *world, Resources *resources);
 static void draw_text(
     Font font, const char *text, Vector2 position, const char *match_prompt
 );
+static void draw_sprite_2d(Texture2D texture, Vector2 position, Resources *resources);
 static void draw_animated_sprite(
     AnimatedSprite animated_sprite, Transform transform, Resources *resources
 );
+static Texture2D load_icon(const char *fp);
+static Texture2D load_sprite(const char *fp);
 static int sort_enemies(const void *enemy1, const void *enemy2);
 static float frand_01(void);
 static float frand_centered(void);
@@ -335,39 +348,26 @@ static void init_resources(Resources *resources) {
 
     // -------------------------------------------------------------------
     // init sprites
+    // icons
+    resources->pause_icon_texture = load_icon("pause_icon");
+    resources->cryonics_icon_texture = load_icon("cryonics_icon");
+    resources->repulse_icon_texture = load_icon("repulse_icon");
+    resources->decay_icon_texture = load_icon("decay_icon");
+    resources->health_icon_texture = load_icon("health_icon");
+    resources->enemy_icon_texture = load_icon("enemy_icon");
+
     // player
-    resources->player_idle_texture = LoadTexture("./resources/sprites/player_idle.png");
-    SetTextureFilter(resources->player_idle_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->player_run_texture = LoadTexture("./resources/sprites/player_run.png");
-    SetTextureFilter(resources->player_run_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->player_shoot_texture = LoadTexture("./resources/sprites/player_shoot.png");
-    SetTextureFilter(resources->player_shoot_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->player_hurt_texture = LoadTexture("./resources/sprites/player_hurt.png");
-    SetTextureFilter(resources->player_hurt_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->player_death_texture = LoadTexture("./resources/sprites/player_death.png");
-    SetTextureFilter(resources->player_death_texture, TEXTURE_FILTER_BILINEAR);
-
+    resources->player_idle_texture = load_sprite("player_idle");
+    resources->player_run_texture = load_sprite("player_run");
+    resources->player_shoot_texture = load_sprite("player_shoot");
+    resources->player_hurt_texture = load_sprite("player_hurt");
+    resources->player_death_texture = load_sprite("player_death");
     // enemy
-    resources->enemy_idle_texture = LoadTexture("./resources/sprites/enemy_idle.png");
-    SetTextureFilter(resources->enemy_idle_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->enemy_run_texture = LoadTexture("./resources/sprites/enemy_run.png");
-    SetTextureFilter(resources->enemy_run_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->enemy_attack_texture = LoadTexture("./resources/sprites/enemy_attack.png");
-    SetTextureFilter(resources->enemy_attack_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->enemy_freeze_texture = LoadTexture("./resources/sprites/enemy_freeze.png");
-    SetTextureFilter(resources->enemy_freeze_texture, TEXTURE_FILTER_BILINEAR);
-
-    resources->enemy_explode_texture = LoadTexture("./resources/sprites/enemy_explode.png"
-    );
-    SetTextureFilter(resources->enemy_explode_texture, TEXTURE_FILTER_BILINEAR);
-
+    resources->enemy_idle_texture = load_sprite("enemy_idle");
+    resources->enemy_run_texture = load_sprite("enemy_run");
+    resources->enemy_attack_texture = load_sprite("enemy_attack");
+    resources->enemy_freeze_texture = load_sprite("enemy_freeze");
+    resources->enemy_explode_texture = load_sprite("enemy_explode");
     // -------------------------------------------------------------------
     // init fonts
     const char *font_file_path = "./resources/fonts/ShareTechMono-Regular.ttf";
@@ -463,7 +463,7 @@ static void init_menu_commands(World *world) {
     world->commands[world->n_commands++] = command;
 }
 
-static void init_playing_commands(World *world) {
+static void init_playing_commands(World *world, Resources *resources) {
     world->n_commands = 0;
     Command command = {0};
 
@@ -472,6 +472,7 @@ static void init_playing_commands(World *world) {
     command.time = command.cooldown;
     command.type = COMMAND_PAUSE;
     command.show_cooldown = true;
+    command.icon_texture = resources->pause_icon_texture;
     strcpy(command.name, "pause");
     world->commands[world->n_commands++] = command;
 
@@ -482,6 +483,7 @@ static void init_playing_commands(World *world) {
     command.type = COMMAND_CRYONICS;
     command.show_cooldown = true;
     command.cryonics.duration = CRYONICS_DURATION;
+    command.icon_texture = resources->cryonics_icon_texture;
     strcpy(command.name, "cryonics");
     world->commands[world->n_commands++] = command;
 
@@ -494,6 +496,7 @@ static void init_playing_commands(World *world) {
     command.repulse.speed = REPULSE_SPEED;
     command.repulse.deceleration = REPULSE_DECELERATION;
     command.repulse.radius = REPULSE_RADIUS;
+    command.icon_texture = resources->repulse_icon_texture;
     strcpy(command.name, "repulse");
     world->commands[world->n_commands++] = command;
 
@@ -504,6 +507,7 @@ static void init_playing_commands(World *world) {
     command.type = COMMAND_DECAY;
     command.show_cooldown = true;
     command.decay.strength = DECAY_STRENGTH;
+    command.icon_texture = resources->decay_icon_texture;
     strcpy(command.name, "decay");
     world->commands[world->n_commands++] = command;
 
@@ -672,22 +676,22 @@ static void update_commands(World *world, Resources *resources) {
                 world->state = STATE_PLAYING;
                 world->difficulty = DIFFICULTY_EASY;
                 strcpy(world->difficulty_str, command->name);
-                init_playing_commands(world);
+                init_playing_commands(world, resources);
             } else if (command->type == COMMAND_START_MEDIUM) {
                 world->state = STATE_PLAYING;
                 world->difficulty = DIFFICULTY_MEDIUM;
                 strcpy(world->difficulty_str, command->name);
-                init_playing_commands(world);
+                init_playing_commands(world, resources);
             } else if (command->type == COMMAND_START_HARD) {
                 world->state = STATE_PLAYING;
                 world->difficulty = DIFFICULTY_HARD;
                 strcpy(world->difficulty_str, command->name);
-                init_playing_commands(world);
+                init_playing_commands(world, resources);
             } else if (command->type == COMMAND_START_MONKEYTYPE) {
                 world->state = STATE_PLAYING;
                 world->difficulty = DIFFICULTY_MONKEYTYPE;
                 strcpy(world->difficulty_str, command->name);
-                init_playing_commands(world);
+                init_playing_commands(world, resources);
             } else if (command->type == COMMAND_PAUSE && world->state == STATE_PLAYING) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "continue");
@@ -913,7 +917,7 @@ static void update_player(World *world, Resources *resources) {
 
     // -------------------------------------------------------------------
     // apply player next state
-    if (player->state != player->next_state) {
+    if (player->state != player->next_state && player->state != PLAYER_DEATH) {
         player->state = player->next_state;
         if (player->state == PLAYER_IDLE) {
             player->animated_sprite = get_animated_sprite(
@@ -1114,10 +1118,6 @@ static void draw_world(World *world, Resources *resources) {
             }
         }
 
-        // draw next spawn enemy ghost
-        // float alpha = 1.0 - world->spawn_countdown / BASE_SPAWN_PERIOD;
-        // DrawSphere(world->spawn_position, 1.0, ColorAlpha(RED, alpha));
-
         // draw shot
         Shot *shot = &world->shot;
         if (shot->time < shot->trace_duration) {
@@ -1175,7 +1175,7 @@ static void draw_world(World *world, Resources *resources) {
             DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
             DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
 
-            // draw player health
+            // draw health
             float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
             Color color = ColorFromNormalized((Vector4){
                 .x = 1.0 - ratio,
@@ -1183,10 +1183,20 @@ static void draw_world(World *world, Resources *resources) {
                 .z = 0.0,
                 .w = 1.0,
             });
-            rec = (Rectangle){8.0, 8.0, 190.0, 20.0};
+            rec = (Rectangle){8.0, 8.0, 190.0, 10.0};
             DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
+
+            BeginShaderMode(resources->sprite_material.shader);
+            DrawTextureEx(
+                resources->health_icon_texture,
+                (Vector2){rec.x, rec.y - 10.0},
+                0.0,
+                1.0,
+                WHITE
+            );
+            EndShaderMode();
 
             // draw enemies spawn progress bar
             if (world->freeze_time >= EPSILON) {
@@ -1201,10 +1211,20 @@ static void draw_world(World *world, Resources *resources) {
                     .w = 1.0,
                 });
             }
-            rec = (Rectangle){8.0, 414.0, 190.0, 20.0};
+            rec = (Rectangle){8.0, 414.0, 190.0, 10.0};
             DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
+
+            BeginShaderMode(resources->sprite_material.shader);
+            DrawTextureEx(
+                resources->enemy_icon_texture,
+                (Vector2){rec.x, rec.y - 10.0},
+                0.0,
+                1.0,
+                WHITE
+            );
+            EndShaderMode();
         }
 
         // ---------------------------------------------------------------
@@ -1290,8 +1310,18 @@ static void draw_world(World *world, Resources *resources) {
             );
         }
 
+        float text_x = 8.0;
+        if (IsTextureReady(command->icon_texture)) {
+            text_x += command->icon_texture.width + 2.0;
+            BeginShaderMode(resources->sprite_material.shader);
+            DrawTextureEx(
+                command->icon_texture, (Vector2){8.0, y - 2.0}, 0.0, 1.0, WHITE
+            );
+            EndShaderMode();
+        }
+
         draw_text(
-            resources->command_font, command->name, (Vector2){8.0, y}, world->prompt
+            resources->command_font, command->name, (Vector2){text_x, y}, world->prompt
         );
 
         // draw command cooldown progress bar
@@ -1359,6 +1389,18 @@ static void draw_text(
     }
 }
 
+static void draw_sprite_2d(Texture2D texture, Vector2 position, Resources *resources) {
+    int loc = GetShaderLocation(resources->sprite_material.shader, "src");
+    float src[4] = {0.0, 0.0, texture.width, texture.height};
+    SetShaderValue(resources->sprite_material.shader, loc, src, SHADER_UNIFORM_VEC4);
+    resources->sprite_material.maps[0].texture = texture;
+
+    rlPushMatrix();
+    rlTranslatef(position.x, position.y, 0.0);
+    DrawMesh(resources->sprite_plane, resources->sprite_material, MatrixIdentity());
+    rlPopMatrix();
+}
+
 static void draw_animated_sprite(
     AnimatedSprite animated_sprite, Transform transform, Resources *resources
 ) {
@@ -1380,6 +1422,17 @@ static void draw_animated_sprite(
     rlRotatef(RAD2DEG * angle, axis.x, axis.z, axis.y);
     DrawMesh(resources->sprite_plane, resources->sprite_material, MatrixIdentity());
     rlPopMatrix();
+}
+
+static Texture2D load_icon(const char *name) {
+    Texture2D texture = LoadTexture(TextFormat("./resources/sprites/%s.png", name));
+    return texture;
+}
+
+static Texture2D load_sprite(const char *name) {
+    Texture2D texture = LoadTexture(TextFormat("./resources/sprites/%s.png", name));
+    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+    return texture;
 }
 
 static int sort_enemies(const void *enemy1, const void *enemy2) {
