@@ -614,6 +614,12 @@ static void update_commands(World *world, Resources *resources) {
         Command *command = &world->commands[i];
         command->time += dt;
 
+        if (strcmp("unfreeze", command->name) == 0 && world->freeze_time <= EPSILON) {
+            command->time = 0.0;
+            strcpy(command->name, "cryonics");
+            world->freeze_time = 0.0;
+        }
+
         bool is_ready = command->time >= command->cooldown;
         bool is_command_matched = strcmp(submit_word, command->name) == 0;
         world->is_command_matched |= is_command_matched;
@@ -960,7 +966,7 @@ static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt) {
 
 static void draw_world(World *world, Resources *resources) {
     BeginDrawing();
-    ClearBackground(BLANK);
+    ClearBackground((Color){20, 55, 20, 255});
 
     // scene
     if (world->state > STATE_MENU) {
