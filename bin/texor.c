@@ -590,10 +590,18 @@ static void update_enemies_spawn(World *world, Resources *resources) {
 
     // don't update spawn_countdown if the world is frozen
     if (world->freeze_time <= EPSILON) {
-        if (world->n_enemies == 0) {
-            world->spawn_countdown = 0.0;
-        } else {
+
+        bool is_any_alive = false;
+        for (int i = 0; i < world->n_enemies; ++i) {
+            if (world->enemies[i].state != ENEMY_EXPLODE) {
+                is_any_alive = true;
+                break;
+            }
+        }
+        if (is_any_alive) {
             world->spawn_countdown -= world->dt;
+        } else {
+            world->spawn_countdown = 0.0;
         }
     }
 
@@ -608,13 +616,6 @@ static void update_enemies_spawn(World *world, Resources *resources) {
                          + (MAX_ENEMY_SPEED_FACTOR - BASE_ENEMY_SPEED_FACTOR)
                                * (1.0 - expf(-world->time * 0.001 * world->difficulty));
     float speed = PLAYER_SPEED * speed_factor;
-
-    TraceLog(
-        LOG_INFO,
-        "\nspawn countdown -> %.3f\nspeed factor-> %.3f",
-        world->spawn_countdown,
-        speed_factor
-    );
 
     Vector3 position = world->spawn_position;
     init_spawn_position(world);
@@ -1121,6 +1122,7 @@ static void draw_world(World *world, Resources *resources) {
             // draw enemy names
             for (int i = 0; i < world->n_enemies; ++i) {
                 Enemy enemy = world->enemies[i];
+                if (enemy.state == ENEMY_EXPLODE) continue;
 
                 Vector2 screen_pos = GetWorldToScreen(
                     enemy.transform.translation, world->camera
