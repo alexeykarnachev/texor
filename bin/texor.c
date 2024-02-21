@@ -39,6 +39,8 @@
 #define DROP_HEAL_VALUE 30.0
 
 #define SPAWN_RADIUS 35.0
+#define ENEMY_RADIUS 2.0
+#define PLAYER_RADIUS 2.0
 // #define BASE_SPAWN_PERIOD 5.0
 #define BASE_SPAWN_PERIOD 0.1
 #define BASE_ENEMY_SPEED_FACTOR 0.3
@@ -193,7 +195,6 @@ typedef struct Enemy {
     Transform transform;
     float speed;
     float attack_strength;
-    float attack_radius;
     float attack_cooldown;
     float recent_attack_time;
     char name[MAX_WORD_LEN];
@@ -636,7 +637,6 @@ static void update_enemies_spawn(World *world, Resources *resources) {
         },
         .speed = speed,
         .attack_strength = 10.0,
-        .attack_radius = 2.0,
         .attack_cooldown = 1.0,
         .recent_attack_time = 0.0,
         .animated_sprite = get_animated_sprite(resources->enemy_run_texture, true),
@@ -824,9 +824,9 @@ static void update_enemies(World *world, Resources *resources) {
         float dist_to_player = Vector3Length(dir);
         dir = Vector3Normalize(dir);
         float time_since_last_attack = world->time - enemy->recent_attack_time;
-        can_attack &= dist_to_player < enemy->attack_radius
+        can_attack &= dist_to_player <= (ENEMY_RADIUS + PLAYER_RADIUS)
                       && time_since_last_attack > enemy->attack_cooldown;
-        can_move &= dist_to_player > enemy->attack_radius;
+        can_move &= dist_to_player > (ENEMY_RADIUS + PLAYER_RADIUS);
 
         if (can_attack) {
             enemy->recent_attack_time = world->time;
@@ -845,6 +845,25 @@ static void update_enemies(World *world, Resources *resources) {
             enemy->next_state = ENEMY_IDLE;
         }
 
+        // resolve enemy collisions with each other
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy *enemy0 = &world->enemies[i];
+            for (int j = 0; j < world->n_enemies; ++j) {
+                if (i == j) continue;
+                Enemy *enemy1 = &world->enemies[j];
+                Vector3 v = Vector3Subtract(
+                    enemy1->transform.translation, enemy0->transform.translation
+                );
+                if (Vector3Length(v) < ENEMY_RADIUS * 2.0) {
+                    v = Vector3Scale(Vector3Normalize(v), ENEMY_RADIUS * 2.0);
+                    enemy1->transform.translation = Vector3Add(
+                        enemy0->transform.translation, v
+                    );
+                }
+            }
+        }
+
+        // rotate enemies towards the player
         if (can_attack || can_move) {
             enemy->transform.rotation = QuaternionFromVector3ToVector3(
                 (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
@@ -976,6 +995,16 @@ static void update_player(World *world, Resources *resources) {
         Vector3 position = player->transform.translation;
         position.x += step.x;
         position.y += step.y;
+
+        // resolve collision with enemies
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy *enemy = &world->enemies[i];
+            Vector3 v = Vector3Subtract(position, enemy->transform.translation);
+            if (Vector3Length(v) < ENEMY_RADIUS + PLAYER_RADIUS) {
+                v = Vector3Scale(Vector3Normalize(v), ENEMY_RADIUS + PLAYER_RADIUS);
+                position = Vector3Add(enemy->transform.translation, v);
+            }
+        }
 
         if (Vector3Length(position) > world->spawn_radius) {
             position = Vector3Scale(Vector3Normalize(position), world->spawn_radius);
@@ -1161,8 +1190,9 @@ static void draw_world(World *world, Resources *resources) {
                     rec_center.x - 0.5 * text_size.x,
                     rec_center.y - 0.5 * resources->command_font.baseSize};
 
-                DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
-                draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
+                // DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
+                // draw_text(resources->command_font, enemy.name, text_pos,
+                // world->prompt);
             }
 
             // commands pane
