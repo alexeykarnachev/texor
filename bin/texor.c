@@ -1190,9 +1190,9 @@ static void draw_world(World *world, Resources *resources) {
                     rec_center.x - 0.5 * text_size.x,
                     rec_center.y - 0.5 * resources->command_font.baseSize};
 
-                // DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 255});
-                // draw_text(resources->command_font, enemy.name, text_pos,
-                // world->prompt);
+                DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 190});
+                draw_text(resources->command_font, enemy.name, text_pos,
+                world->prompt);
             }
 
             // commands pane
