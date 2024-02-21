@@ -1314,8 +1314,19 @@ static void draw_world(World *world, Resources *resources) {
         if (IsTextureReady(command->icon_texture)) {
             text_x += command->icon_texture.width + 2.0;
             BeginShaderMode(resources->sprite_material.shader);
+            float alpha = 1.0;
+            if (ratio < 1.0 - EPSILON) {
+                float min_alpha = 0.2;
+                float max_alpha = 0.4;
+                alpha = ((sinf(GetTime() * 8.0) + 1.0) / 2.0) * (max_alpha - min_alpha)
+                        + min_alpha;
+            }
             DrawTextureEx(
-                command->icon_texture, (Vector2){8.0, y - 2.0}, 0.0, 1.0, WHITE
+                command->icon_texture,
+                (Vector2){8.0, y - 2.0},
+                0.0,
+                1.0,
+                ColorAlpha(GREEN, alpha)
             );
             EndShaderMode();
         }

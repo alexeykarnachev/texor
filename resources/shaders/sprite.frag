@@ -1,4 +1,5 @@
 in vec2 fragTexCoord;
+in vec4 fragColor;
 
 uniform sampler2D texture0;
 uniform vec4 src;  // (x, y, w, h)
@@ -16,5 +17,5 @@ void main() {
 
     vec4 color = texture(texture0, uv);
     if (color.a < 0.02) discard;
-    finalColor = color;
+    finalColor = color * fragColor;
 }
