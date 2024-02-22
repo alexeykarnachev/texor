@@ -288,6 +288,7 @@ typedef struct Resources {
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
+    Music growling_music;
     Music water_dropping_music;
 
     SoundsRoulette roar_sounds;
@@ -341,7 +342,7 @@ static void update_enemies(World *world, Resources *resources);
 static void update_drops(World *world, Resources *resources);
 static void update_player(World *world, Resources *resources);
 static void update_camera(World *world);
-static void update_roar(World *world, Resources *resources);
+static void update_audio(World *world, Resources *resources);
 static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt);
 static void draw_world(World *world, Resources *resources);
 static void draw_text(
@@ -380,6 +381,8 @@ int main(void) {
 static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
     // Audio
+    resources->growling_music = LoadMusicStream("./resources/audio/growling.mp3");
+    SetMusicVolume(resources->growling_music, 0.0);
     resources->water_dropping_music = LoadMusicStream(
         "./resources/audio/water_dropping.mp3"
     );
@@ -492,6 +495,7 @@ static void init_world(World *world, Resources *resources) {
 
     // -------------------------------------------------------------------
     // play music
+    PlayMusicStream(resources->growling_music);
     PlayMusicStream(resources->water_dropping_music);
 }
 
@@ -623,10 +627,11 @@ static void update_world(World *world, Resources *resources) {
     update_enemies(world, resources);
     update_drops(world, resources);
     update_player(world, resources);
-    update_roar(world, resources);
+    update_audio(world, resources);
     world->shot.time += world->dt;
 
     UpdateMusicStream(resources->water_dropping_music);
+    UpdateMusicStream(resources->growling_music);
 
     if (world->state == STATE_PLAYING && world->submit_word[0] != '\0'
         && !world->is_command_matched) {
@@ -1132,12 +1137,36 @@ static void update_player(World *world, Resources *resources) {
     }
 }
 
-static void update_roar(World *world, Resources *resources) {
+static void update_audio(World *world, Resources *resources) {
+    // update roar (background)
     if (world->roar_time <= 0.0 && world->time > MIN_ROAR_PERIOD) {
         play_sounds_roulette_rnd(&resources->roar_sounds, 0.4);
         world->roar_time = GetRandomValue(MIN_ROAR_PERIOD, MAX_ROAR_PERIOD);
     }
     world->roar_time -= world->dt;
+
+    // update growling
+    float vol = 0.0;
+    if (world->state == STATE_PLAYING) {
+        float max_d = SPAWN_RADIUS * 2.0;
+        for (int i = 0; i < world->n_enemies; ++i) {
+            Enemy *enemy = &world->enemies[i];
+            if (enemy->state == ENEMY_RUN) {
+                float d = Vector3Distance(
+                    enemy->transform.translation, world->player.transform.translation
+                );
+
+                if (d < max_d) {
+                    d = (max_d - d) / max_d;
+                    d = d * d;
+                    vol += d * 0.2;
+                }
+            }
+        }
+
+        vol = min(1.0, vol);
+    }
+    SetMusicVolume(resources->growling_music, vol);
 }
 
 static void update_camera(World *world) {
