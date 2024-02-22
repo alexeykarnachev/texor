@@ -280,10 +280,15 @@ typedef struct Resources {
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
+    SoundsRoulette error_sounds;
+    SoundsRoulette pause_sounds;
     SoundsRoulette enemy_death_sounds;
     SoundsRoulette pickup_sounds;
     SoundsRoulette shot_sounds;
     SoundsRoulette cryonics_sounds;
+    SoundsRoulette unfreeze_sounds;
+    SoundsRoulette repulse_sounds;
+    SoundsRoulette decay_sounds;
 
     Texture2D pause_icon_texture;
     Texture2D cryonics_icon_texture;
@@ -359,10 +364,15 @@ int main(void) {
 static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
     // Audio
+    resources->error_sounds = load_sounds_roulette("error");
+    resources->pause_sounds = load_sounds_roulette("pause");
     resources->enemy_death_sounds = load_sounds_roulette("enemy_death");
     resources->pickup_sounds = load_sounds_roulette("pickup");
     resources->shot_sounds = load_sounds_roulette("shot");
     resources->cryonics_sounds = load_sounds_roulette("cryonics");
+    resources->unfreeze_sounds = load_sounds_roulette("unfreeze");
+    resources->repulse_sounds = load_sounds_roulette("repulse");
+    resources->decay_sounds = load_sounds_roulette("decay");
 
     // -------------------------------------------------------------------
     // init models, meshes and materials
@@ -691,7 +701,7 @@ static void update_commands(World *world, Resources *resources) {
         }
 
         bool is_ready = command->time >= command->cooldown;
-        bool is_command_matched = strcmp(submit_word, command->name) == 0;
+        bool is_command_matched = is_ready && strcmp(submit_word, command->name) == 0;
         world->is_command_matched |= is_command_matched;
         if (is_command_matched && is_ready) {
             if (command->type == COMMAND_EXIT_GAME) {
@@ -720,10 +730,12 @@ static void update_commands(World *world, Resources *resources) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "continue");
                 world->state = STATE_PAUSE;
+                play_sounds_roulette(&resources->pause_sounds);
             } else if (command->type == COMMAND_PAUSE && world->state == STATE_PAUSE) {
                 command->time = 0.0;
                 strcpy(command->name, "pause");
                 world->state = STATE_PLAYING;
+                play_sounds_roulette(&resources->pause_sounds);
             } else if (command->type == COMMAND_RESTART_GAME) {
                 init_world(world, resources);
             } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING && world->freeze_time <= EPSILON) {
@@ -735,6 +747,7 @@ static void update_commands(World *world, Resources *resources) {
                 command->time = 0.0;
                 strcpy(command->name, "cryonics");
                 world->freeze_time = 0.0;
+                play_sounds_roulette(&resources->unfreeze_sounds);
             } else if (command->type == COMMAND_REPULSE && world->state == STATE_PLAYING) {
                 command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
@@ -750,6 +763,7 @@ static void update_commands(World *world, Resources *resources) {
                         enemy->impulse.direction = dir;
                     }
                 }
+                play_sounds_roulette(&resources->repulse_sounds);
             } else if (command->type == COMMAND_DECAY && world->state == STATE_PLAYING) {
                 command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
@@ -757,6 +771,7 @@ static void update_commands(World *world, Resources *resources) {
                     int len = max(1, strlen(enemy->name) / 2);
                     enemy->name[len] = '\0';
                 }
+                play_sounds_roulette(&resources->decay_sounds);
             }
         }
     }
@@ -875,9 +890,11 @@ static void update_enemies(World *world, Resources *resources) {
         // resolve enemy collisions with each other
         for (int i = 0; i < world->n_enemies; ++i) {
             Enemy *enemy0 = &world->enemies[i];
+            if (enemy0->state == ENEMY_EXPLODE) continue;
             for (int j = 0; j < world->n_enemies; ++j) {
                 if (i == j) continue;
                 Enemy *enemy1 = &world->enemies[j];
+                if (enemy1->state == ENEMY_EXPLODE) continue;
                 Vector3 v = Vector3Subtract(
                     enemy1->transform.translation, enemy0->transform.translation
                 );
@@ -1016,7 +1033,7 @@ static void update_player(World *world, Resources *resources) {
     dir.x -= IsKeyDown(KEY_LEFT);
     dir.x += IsKeyDown(KEY_RIGHT);
 
-    if (Vector2Length(dir) >= EPSILON) {
+    if (Vector2Length(dir) >= EPSILON && world->state != STATE_PAUSE) {
         dir = Vector2Normalize(dir);
         Vector2 step = Vector2Scale(dir, PLAYER_SPEED * world->dt);
 
@@ -1057,6 +1074,7 @@ static void update_player(World *world, Resources *resources) {
               .duration = CAMERA_SHAKE_TIME,
               .strength = WRONG_COMMAND_DAMAGE};
             player->next_state = PLAYER_HURT;
+            play_sounds_roulette(&resources->error_sounds);
         }
 
         // damage player if backspace is pressed
