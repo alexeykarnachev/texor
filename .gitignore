@@ -1,6 +1,7 @@
 TODO
 deps
 aseprite
+blockbench
 build
 bin/*
 !bin/*.c
