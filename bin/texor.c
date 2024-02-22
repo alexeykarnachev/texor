@@ -26,6 +26,9 @@
 #define MAX_N_ENEMY_NAMES 20000
 #define MAX_N_ENEMY_EFFECTS 16
 
+// sound
+#define PLAYER_STEP_PERIOD 0.7
+
 // camera
 #define CAMERA_INIT_POSITION ((Vector3){-10.0, 0.0, 70.0})
 #define CAMERA_SHAKE_TIME 0.2
@@ -179,6 +182,7 @@ typedef struct Player {
     Transform transform;
     float max_health;
     float health;
+    float step_time;
 
     PlayerState state;
     PlayerState next_state;
@@ -280,6 +284,7 @@ typedef struct Resources {
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
+    SoundsRoulette player_step_sounds;
     SoundsRoulette error_sounds;
     SoundsRoulette pause_sounds;
     SoundsRoulette enemy_death_sounds;
@@ -345,6 +350,7 @@ static float frand_centered(void);
 static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat);
 static bool is_animated_sprite_finished(AnimatedSprite animated_sprite);
 static void play_sounds_roulette(SoundsRoulette *sounds);
+static void play_sounds_roulette_rnd(SoundsRoulette *sounds);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -364,6 +370,7 @@ int main(void) {
 static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
     // Audio
+    resources->player_step_sounds = load_sounds_roulette("player_step");
     resources->error_sounds = load_sounds_roulette("error");
     resources->pause_sounds = load_sounds_roulette("pause");
     resources->enemy_death_sounds = load_sounds_roulette("enemy_death");
@@ -1061,6 +1068,13 @@ static void update_player(World *world, Resources *resources) {
             (Vector3){0.0, 1.0, 0.0}, (Vector3){dir.x, dir.y, 0.0}
         );
         player->next_state = PLAYER_RUN;
+
+        if (player->step_time >= PLAYER_STEP_PERIOD) {
+            player->step_time = 0.0;
+            play_sounds_roulette_rnd(&resources->player_step_sounds);
+        }
+        player->step_time += world->dt;
+
     } else if (player->state == PLAYER_RUN) {
         player->next_state = PLAYER_IDLE;
     }
@@ -1607,4 +1621,10 @@ static void play_sounds_roulette(SoundsRoulette *sounds) {
     if (sounds->n == 0) return;
     PlaySound(sounds->sounds[sounds->i++]);
     if (sounds->i >= sounds->n) sounds->i = 0;
+}
+
+static void play_sounds_roulette_rnd(SoundsRoulette *sounds) {
+    if (sounds->n == 0) return;
+    sounds->i = GetRandomValue(0, sounds->n - 1);
+    PlaySound(sounds->sounds[sounds->i]);
 }
