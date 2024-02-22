@@ -28,6 +28,8 @@
 
 // sound
 #define PLAYER_STEP_PERIOD 0.7
+#define MIN_ROAR_PERIOD 10
+#define MAX_ROAR_PERIOD 20
 
 // camera
 #define CAMERA_INIT_POSITION ((Vector3){-10.0, 0.0, 70.0})
@@ -234,6 +236,8 @@ typedef enum WorldState {
 } WorldState;
 
 typedef struct World {
+    float roar_time;
+
     Player player;
     Shot shot;
 
@@ -284,7 +288,12 @@ typedef struct Resources {
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
+    Music water_dropping_music;
+
+    SoundsRoulette roar_sounds;
     SoundsRoulette player_step_sounds;
+    SoundsRoulette enemy_attack_sounds;
+    SoundsRoulette bite_sounds;
     SoundsRoulette error_sounds;
     SoundsRoulette pause_sounds;
     SoundsRoulette enemy_death_sounds;
@@ -332,6 +341,7 @@ static void update_enemies(World *world, Resources *resources);
 static void update_drops(World *world, Resources *resources);
 static void update_player(World *world, Resources *resources);
 static void update_camera(World *world);
+static void update_roar(World *world, Resources *resources);
 static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt);
 static void draw_world(World *world, Resources *resources);
 static void draw_text(
@@ -349,8 +359,8 @@ static float frand_01(void);
 static float frand_centered(void);
 static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat);
 static bool is_animated_sprite_finished(AnimatedSprite animated_sprite);
-static void play_sounds_roulette(SoundsRoulette *sounds);
-static void play_sounds_roulette_rnd(SoundsRoulette *sounds);
+static void play_sounds_roulette(SoundsRoulette *sounds, float vol);
+static void play_sounds_roulette_rnd(SoundsRoulette *sounds, float vol);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -370,7 +380,14 @@ int main(void) {
 static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
     // Audio
+    resources->water_dropping_music = LoadMusicStream(
+        "./resources/audio/water_dropping.mp3"
+    );
+
+    resources->roar_sounds = load_sounds_roulette("roar");
     resources->player_step_sounds = load_sounds_roulette("player_step");
+    resources->enemy_attack_sounds = load_sounds_roulette("enemy_attack");
+    resources->bite_sounds = load_sounds_roulette("bite");
     resources->error_sounds = load_sounds_roulette("error");
     resources->pause_sounds = load_sounds_roulette("pause");
     resources->enemy_death_sounds = load_sounds_roulette("enemy_death");
@@ -472,6 +489,10 @@ static void init_world(World *world, Resources *resources) {
     world->state = STATE_MENU;
     world->spawn_radius = SPAWN_RADIUS;
     init_spawn_position(world);
+
+    // -------------------------------------------------------------------
+    // play music
+    PlayMusicStream(resources->water_dropping_music);
 }
 
 static void init_menu_commands(World *world) {
@@ -602,7 +623,10 @@ static void update_world(World *world, Resources *resources) {
     update_enemies(world, resources);
     update_drops(world, resources);
     update_player(world, resources);
+    update_roar(world, resources);
     world->shot.time += world->dt;
+
+    UpdateMusicStream(resources->water_dropping_music);
 
     if (world->state == STATE_PLAYING && world->submit_word[0] != '\0'
         && !world->is_command_matched) {
@@ -737,24 +761,24 @@ static void update_commands(World *world, Resources *resources) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "continue");
                 world->state = STATE_PAUSE;
-                play_sounds_roulette(&resources->pause_sounds);
+                play_sounds_roulette(&resources->pause_sounds, 1.0);
             } else if (command->type == COMMAND_PAUSE && world->state == STATE_PAUSE) {
                 command->time = 0.0;
                 strcpy(command->name, "pause");
                 world->state = STATE_PLAYING;
-                play_sounds_roulette(&resources->pause_sounds);
+                play_sounds_roulette(&resources->pause_sounds, 1.0);
             } else if (command->type == COMMAND_RESTART_GAME) {
                 init_world(world, resources);
             } else if (command->type == COMMAND_CRYONICS && world->state == STATE_PLAYING && world->freeze_time <= EPSILON) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "unfreeze");
                 world->freeze_time = command->cryonics.duration;
-                play_sounds_roulette(&resources->cryonics_sounds);
+                play_sounds_roulette(&resources->cryonics_sounds, 1.0);
             } else if (command->type == COMMAND_CRYONICS && world->freeze_time >= EPSILON) {
                 command->time = 0.0;
                 strcpy(command->name, "cryonics");
                 world->freeze_time = 0.0;
-                play_sounds_roulette(&resources->unfreeze_sounds);
+                play_sounds_roulette(&resources->unfreeze_sounds, 1.0);
             } else if (command->type == COMMAND_REPULSE && world->state == STATE_PLAYING) {
                 command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
@@ -770,7 +794,7 @@ static void update_commands(World *world, Resources *resources) {
                         enemy->impulse.direction = dir;
                     }
                 }
-                play_sounds_roulette(&resources->repulse_sounds);
+                play_sounds_roulette(&resources->repulse_sounds, 1.0);
             } else if (command->type == COMMAND_DECAY && world->state == STATE_PLAYING) {
                 command->time = 0.0;
                 for (int i = 0; i < world->n_enemies; ++i) {
@@ -778,7 +802,7 @@ static void update_commands(World *world, Resources *resources) {
                     int len = max(1, strlen(enemy->name) / 2);
                     enemy->name[len] = '\0';
                 }
-                play_sounds_roulette(&resources->decay_sounds);
+                play_sounds_roulette(&resources->decay_sounds, 1.0);
             }
         }
     }
@@ -837,8 +861,8 @@ static void update_enemies(World *world, Resources *resources) {
               .end_position = enemy->transform.translation};
             enemy->next_state = ENEMY_EXPLODE;
             world->is_command_matched = true;
-            play_sounds_roulette(&resources->shot_sounds);
-            play_sounds_roulette(&resources->enemy_death_sounds);
+            play_sounds_roulette(&resources->shot_sounds, 1.0);
+            play_sounds_roulette(&resources->enemy_death_sounds, 1.0);
             continue;
         }
 
@@ -886,6 +910,8 @@ static void update_enemies(World *world, Resources *resources) {
               .duration = CAMERA_SHAKE_TIME,
               .strength = enemy->attack_strength};
             enemy->next_state = ENEMY_ATTACK;
+            play_sounds_roulette_rnd(&resources->enemy_attack_sounds, 1.0);
+            play_sounds_roulette_rnd(&resources->bite_sounds, 1.0);
         } else if (can_move) {
             Vector3 step = Vector3Scale(dir, enemy->speed * world->dt);
             enemy->transform.translation = Vector3Add(enemy->transform.translation, step);
@@ -972,7 +998,7 @@ static void update_drops(World *world, Resources *resources) {
                         command->time = command->cooldown;
                     }
                 }
-                play_sounds_roulette(&resources->pickup_sounds);
+                play_sounds_roulette(&resources->pickup_sounds, 1.0);
             } else {
                 world->drops[n_alive_drops++] = *drop;
             }
@@ -1071,7 +1097,7 @@ static void update_player(World *world, Resources *resources) {
 
         if (player->step_time >= PLAYER_STEP_PERIOD) {
             player->step_time = 0.0;
-            play_sounds_roulette_rnd(&resources->player_step_sounds);
+            play_sounds_roulette_rnd(&resources->player_step_sounds, 0.4);
         }
         player->step_time += world->dt;
 
@@ -1088,7 +1114,7 @@ static void update_player(World *world, Resources *resources) {
               .duration = CAMERA_SHAKE_TIME,
               .strength = WRONG_COMMAND_DAMAGE};
             player->next_state = PLAYER_HURT;
-            play_sounds_roulette(&resources->error_sounds);
+            play_sounds_roulette(&resources->error_sounds, 1.0);
         }
 
         // damage player if backspace is pressed
@@ -1104,6 +1130,14 @@ static void update_player(World *world, Resources *resources) {
     if (is_animated_sprite_finished(player->animated_sprite)) {
         player->next_state = PLAYER_IDLE;
     }
+}
+
+static void update_roar(World *world, Resources *resources) {
+    if (world->roar_time <= 0.0 && world->time > MIN_ROAR_PERIOD) {
+        play_sounds_roulette_rnd(&resources->roar_sounds, 0.4);
+        world->roar_time = GetRandomValue(MIN_ROAR_PERIOD, MAX_ROAR_PERIOD);
+    }
+    world->roar_time -= world->dt;
 }
 
 static void update_camera(World *world) {
@@ -1617,14 +1651,18 @@ static bool is_animated_sprite_finished(AnimatedSprite animated_sprite) {
     return animated_sprite.time >= total_duration;
 }
 
-static void play_sounds_roulette(SoundsRoulette *sounds) {
+static void play_sounds_roulette(SoundsRoulette *sounds, float vol) {
     if (sounds->n == 0) return;
-    PlaySound(sounds->sounds[sounds->i++]);
+    Sound sound = sounds->sounds[sounds->i++];
+    SetSoundVolume(sound, vol);
+    PlaySound(sound);
     if (sounds->i >= sounds->n) sounds->i = 0;
 }
 
-static void play_sounds_roulette_rnd(SoundsRoulette *sounds) {
+static void play_sounds_roulette_rnd(SoundsRoulette *sounds, float vol) {
     if (sounds->n == 0) return;
     sounds->i = GetRandomValue(0, sounds->n - 1);
-    PlaySound(sounds->sounds[sounds->i]);
+    Sound sound = sounds->sounds[sounds->i];
+    SetSoundVolume(sound, vol);
+    PlaySound(sound);
 }
