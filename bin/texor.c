@@ -5,6 +5,7 @@
 #include "rlgl.h"
 #include <asm-generic/errno.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -34,7 +35,8 @@
 
 // drop
 #define MAX_N_DROPS 4
-#define DROP_PROBABILITY 0.5
+#define DROP_RADIUS 2.0
+#define DROP_PROBABILITY 1.0
 #define DROP_DURATION 30.0
 #define DROP_HEAL_VALUE 30.0
 
@@ -213,6 +215,13 @@ typedef struct Enemy {
     int n_matched_chars;
 } Enemy;
 
+#define MAX_N_ROULETTE_SOUNDS 8
+typedef struct SoundsRoulette {
+    int n;
+    int i;
+    Sound sounds[MAX_N_ROULETTE_SOUNDS];
+} SoundsRoulette;
+
 typedef enum WorldState {
     STATE_MENU,
     STATE_PLAYING,
@@ -271,6 +280,11 @@ typedef struct Resources {
     int n_boss_names;
     char boss_names[MAX_N_ENEMY_NAMES][MAX_WORD_LEN];
 
+    SoundsRoulette enemy_death_sounds;
+    SoundsRoulette pickup_sounds;
+    SoundsRoulette shot_sounds;
+    SoundsRoulette cryonics_sounds;
+
     Texture2D pause_icon_texture;
     Texture2D cryonics_icon_texture;
     Texture2D repulse_icon_texture;
@@ -305,7 +319,7 @@ static void update_prompt(World *world);
 static void update_enemies_spawn(World *world, Resources *resources);
 static void update_commands(World *world, Resources *resources);
 static void update_enemies(World *world, Resources *resources);
-static void update_drops(World *world);
+static void update_drops(World *world, Resources *resources);
 static void update_player(World *world, Resources *resources);
 static void update_camera(World *world);
 static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt);
@@ -319,15 +333,18 @@ static void draw_animated_sprite(
 );
 static Texture2D load_icon(const char *fp);
 static Texture2D load_sprite(const char *fp);
+static SoundsRoulette load_sounds_roulette(char *prefix);
 static int sort_enemies(const void *enemy1, const void *enemy2);
 static float frand_01(void);
 static float frand_centered(void);
 static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat);
 static bool is_animated_sprite_finished(AnimatedSprite animated_sprite);
+static void play_sounds_roulette(SoundsRoulette *sounds);
 
 int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "texor");
+    InitAudioDevice();
     SetTargetFPS(60);
 
     init_resources(&RESOURCES);
@@ -341,7 +358,14 @@ int main(void) {
 
 static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
-    // init meshes and materials
+    // Audio
+    resources->enemy_death_sounds = load_sounds_roulette("enemy_death");
+    resources->pickup_sounds = load_sounds_roulette("pickup");
+    resources->shot_sounds = load_sounds_roulette("shot");
+    resources->cryonics_sounds = load_sounds_roulette("cryonics");
+
+    // -------------------------------------------------------------------
+    // init models, meshes and materials
     resources->sprite_plane = GenMeshPlane(6.0, 6.0, 2, 2);
     resources->sprite_material = LoadMaterialDefault();
     resources->sprite_material.shader = load_shader(0, "sprite.frag");
@@ -559,7 +583,7 @@ static void update_world(World *world, Resources *resources) {
     update_camera(world);
     update_enemies_spawn(world, resources);
     update_enemies(world, resources);
-    update_drops(world);
+    update_drops(world, resources);
     update_player(world, resources);
     world->shot.time += world->dt;
 
@@ -706,6 +730,7 @@ static void update_commands(World *world, Resources *resources) {
                 command->time = command->cooldown + 1.0;
                 strcpy(command->name, "unfreeze");
                 world->freeze_time = command->cryonics.duration;
+                play_sounds_roulette(&resources->cryonics_sounds);
             } else if (command->type == COMMAND_CRYONICS && world->freeze_time >= EPSILON) {
                 command->time = 0.0;
                 strcpy(command->name, "cryonics");
@@ -790,6 +815,8 @@ static void update_enemies(World *world, Resources *resources) {
               .end_position = enemy->transform.translation};
             enemy->next_state = ENEMY_EXPLODE;
             world->is_command_matched = true;
+            play_sounds_roulette(&resources->shot_sounds);
+            play_sounds_roulette(&resources->enemy_death_sounds);
             continue;
         }
 
@@ -902,7 +929,7 @@ static void update_enemies(World *world, Resources *resources) {
     qsort(world->enemies, world->n_enemies, sizeof(Enemy), sort_enemies);
 }
 
-static void update_drops(World *world) {
+static void update_drops(World *world, Resources *resources) {
 
     Vector3 player_position = world->player.transform.translation;
 
@@ -912,7 +939,7 @@ static void update_drops(World *world) {
         drop->time -= world->dt;
         if (drop->time > EPSILON) {
             float dist = Vector3Distance(drop->position, player_position);
-            if (dist <= 2.0) {
+            if (dist <= PLAYER_RADIUS + DROP_RADIUS) {
                 if (drop->type == DROP_HEAL) {
                     world->player.health += drop->heal.value;
                 } else if (drop->type == DROP_REFRESH) {
@@ -921,6 +948,7 @@ static void update_drops(World *world) {
                         command->time = command->cooldown;
                     }
                 }
+                play_sounds_roulette(&resources->pickup_sounds);
             } else {
                 world->drops[n_alive_drops++] = *drop;
             }
@@ -999,6 +1027,7 @@ static void update_player(World *world, Resources *resources) {
         // resolve collision with enemies
         for (int i = 0; i < world->n_enemies; ++i) {
             Enemy *enemy = &world->enemies[i];
+            if (enemy->state == ENEMY_EXPLODE) continue;
             Vector3 v = Vector3Subtract(position, enemy->transform.translation);
             if (Vector3Length(v) < ENEMY_RADIUS + PLAYER_RADIUS) {
                 v = Vector3Scale(Vector3Normalize(v), ENEMY_RADIUS + PLAYER_RADIUS);
@@ -1191,8 +1220,7 @@ static void draw_world(World *world, Resources *resources) {
                     rec_center.y - 0.5 * resources->command_font.baseSize};
 
                 DrawRectangleRounded(rec, 0.3, 16, (Color){20, 20, 20, 190});
-                draw_text(resources->command_font, enemy.name, text_pos,
-                world->prompt);
+                draw_text(resources->command_font, enemy.name, text_pos, world->prompt);
             }
 
             // commands pane
@@ -1476,6 +1504,50 @@ static Texture2D load_sprite(const char *name) {
     return texture;
 }
 
+static int pstrcmp(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+static SoundsRoulette load_sounds_roulette(char *prefix) {
+    SoundsRoulette sounds = {0};
+
+    int n_file_names;
+    const char *path = "./resources/audio";
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
+        TraceLog(LOG_ERROR, "Failed to open directory %s", path);
+        exit(1);
+    }
+
+    char **file_names = (char **)malloc(256 * sizeof(char *));
+
+    int i = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_type == DT_REG) {
+            file_names[i] = strdup(entry->d_name);
+            i += 1;
+        }
+    }
+
+    n_file_names = i;
+    closedir(dir);
+    qsort(file_names, n_file_names, sizeof(file_names[0]), pstrcmp);
+
+    for (int i = 0; i < n_file_names; ++i) {
+        if (sounds.n == MAX_N_ROULETTE_SOUNDS) break;
+
+        char *file_name = file_names[i];
+        if (strncmp(file_name, prefix, strlen(prefix)) == 0) {
+            const char *file_path_parts[2] = {path, file_name};
+            const char *file_path = TextJoin(file_path_parts, 2, "/");
+            sounds.sounds[sounds.n++] = LoadSound(file_path);
+        }
+    }
+
+    return sounds;
+}
+
 static int sort_enemies(const void *enemy1, const void *enemy2) {
     int n1 = ((Enemy *)enemy1)->n_matched_chars;
     int n2 = ((Enemy *)enemy2)->n_matched_chars;
@@ -1511,4 +1583,10 @@ static bool is_animated_sprite_finished(AnimatedSprite animated_sprite) {
     float frame_duration = 1.0 / animated_sprite.fps;
     float total_duration = frame_duration * animated_sprite.n_frames;
     return animated_sprite.time >= total_duration;
+}
+
+static void play_sounds_roulette(SoundsRoulette *sounds) {
+    if (sounds->n == 0) return;
+    PlaySound(sounds->sounds[sounds->i++]);
+    if (sounds->i >= sounds->n) sounds->i = 0;
 }
