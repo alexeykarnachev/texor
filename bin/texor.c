@@ -305,6 +305,10 @@ typedef struct Resources {
     SoundsRoulette repulse_sounds;
     SoundsRoulette decay_sounds;
 
+    Texture2D commands_pane_texture;
+
+    Texture2D exit_icon_texture;
+    Texture2D restart_icon_texture;
     Texture2D pause_icon_texture;
     Texture2D cryonics_icon_texture;
     Texture2D repulse_icon_texture;
@@ -332,7 +336,7 @@ static void init_resources(Resources *resources);
 static void init_world(World *world, Resources *resources);
 static void init_menu_commands(World *world);
 static void init_playing_commands(World *world, Resources *resources);
-static void init_game_over_commands(World *world);
+static void init_game_over_commands(World *world, Resources *resources);
 static void init_spawn_position(World *world);
 static void update_world(World *world, Resources *resources);
 static void update_prompt(World *world);
@@ -358,6 +362,7 @@ static SoundsRoulette load_sounds_roulette(char *prefix);
 static int sort_enemies(const void *enemy1, const void *enemy2);
 static float frand_01(void);
 static float frand_centered(void);
+static float frand_range(float left, float right);
 static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat);
 static bool is_animated_sprite_finished(AnimatedSprite animated_sprite);
 static void play_sounds_roulette(SoundsRoulette *sounds, float vol);
@@ -410,7 +415,12 @@ static void init_resources(Resources *resources) {
 
     // -------------------------------------------------------------------
     // init sprites
+    // ui
+    resources->commands_pane_texture = load_icon("commands_pane");
+
     // icons
+    resources->exit_icon_texture = load_icon("exit_icon");
+    resources->restart_icon_texture = load_icon("restart_icon");
     resources->pause_icon_texture = load_icon("pause_icon");
     resources->cryonics_icon_texture = load_icon("cryonics_icon");
     resources->repulse_icon_texture = load_icon("repulse_icon");
@@ -582,21 +592,24 @@ static void init_playing_commands(World *world, Resources *resources) {
     memset(&command, 0, sizeof(Command));
     command.type = COMMAND_EXIT_GAME;
     command.show_cooldown = false;
+    command.icon_texture = resources->exit_icon_texture;
     strcpy(command.name, "exit");
     world->commands[world->n_commands++] = command;
 }
 
-static void init_game_over_commands(World *world) {
+static void init_game_over_commands(World *world, Resources *resources) {
     world->n_commands = 0;
     Command command = {0};
 
     // restart command
     command.type = COMMAND_RESTART_GAME;
+    command.icon_texture = resources->restart_icon_texture;
     strcpy(command.name, "restart");
     world->commands[world->n_commands++] = command;
 
     // exit command
     command.type = COMMAND_EXIT_GAME;
+    command.icon_texture = resources->exit_icon_texture;
     strcpy(command.name, "exit");
     world->commands[world->n_commands++] = command;
 }
@@ -1049,7 +1062,7 @@ static void update_player(World *world, Resources *resources) {
             player->next_state = PLAYER_DEATH;
         } else if (is_animated_sprite_finished(player->animated_sprite)) {
             world->state = STATE_GAME_OVER;
-            init_game_over_commands(world);
+            init_game_over_commands(world, resources);
         }
         return;
     }
@@ -1141,7 +1154,7 @@ static void update_audio(World *world, Resources *resources) {
     // update roar (background)
     if (world->roar_time <= 0.0 && world->time > MIN_ROAR_PERIOD) {
         play_sounds_roulette_rnd(&resources->roar_sounds, 0.4);
-        world->roar_time = GetRandomValue(MIN_ROAR_PERIOD, MAX_ROAR_PERIOD);
+        world->roar_time = frand_range(MIN_ROAR_PERIOD, MAX_ROAR_PERIOD);
     }
     world->roar_time -= world->dt;
 
@@ -1206,6 +1219,8 @@ static void draw_world(World *world, Resources *resources) {
     BeginDrawing();
     ClearBackground(BLANK);
 
+    float x = 13.0;
+    float w = 178.0;
     // scene
     if (world->state > STATE_MENU) {
         BeginMode3D(world->camera);
@@ -1319,14 +1334,21 @@ static void draw_world(World *world, Resources *resources) {
             }
 
             // commands pane
-            Rectangle rec = {2.0, 2.0, 200.0, 400.0};
-            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
-            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
-
-            // stats pane
-            rec = (Rectangle){2.0, 408.0, 200.0, 180.0};
-            DrawRectangleRounded(rec, 0.05, 16, UI_BACKGROUND_COLOR);
-            DrawRectangleRoundedLines(rec, 0.05, 16, 2.0, UI_OUTLINE_COLOR);
+            float aspect = (float)resources->commands_pane_texture.width
+                           / resources->commands_pane_texture.height;
+            Rectangle rec = {2.0, 2.0, 580 * aspect, 580.0};
+            DrawTexturePro(
+                resources->commands_pane_texture,
+                (Rectangle
+                ){0.0,
+                  0.0,
+                  resources->commands_pane_texture.width,
+                  resources->commands_pane_texture.height},
+                rec,
+                (Vector2){0.0, 0.0},
+                0.0,
+                WHITE
+            );
 
             // draw health
             float ratio = fmaxf(0.0, world->player.health / world->player.max_health);
@@ -1336,8 +1358,7 @@ static void draw_world(World *world, Resources *resources) {
                 .z = 0.0,
                 .w = 1.0,
             });
-            rec = (Rectangle){8.0, 8.0, 190.0, 10.0};
-            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+            rec = (Rectangle){x, 12.0, w, 10.0};
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
 
@@ -1364,8 +1385,7 @@ static void draw_world(World *world, Resources *resources) {
                     .w = 1.0,
                 });
             }
-            rec = (Rectangle){8.0, 414.0, 190.0, 10.0};
-            DrawRectangleRoundedLines(rec, 0.5, 16, 2.0, UI_OUTLINE_COLOR);
+            rec = (Rectangle){x, 425.0, w, 10.0};
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
 
@@ -1380,11 +1400,6 @@ static void draw_world(World *world, Resources *resources) {
             EndShaderMode();
         }
 
-        // ---------------------------------------------------------------
-        // draw stats
-        // TODO: draw stats only on the STATE_GAME_OVER
-        // if (world->state == STATE_GAME_OVER) {
-
         float accuracy = 1.0;
         int cpm = 0;
         if (world->n_keystrokes_typed > 0) {
@@ -1396,7 +1411,7 @@ static void draw_world(World *world, Resources *resources) {
         draw_text(
             resources->stats_font,
             TextFormat("Kills: %d", world->n_enemies_killed),
-            (Vector2){8.0, y},
+            (Vector2){x, y},
             0
         );
 
@@ -1404,7 +1419,7 @@ static void draw_world(World *world, Resources *resources) {
         draw_text(
             resources->stats_font,
             TextFormat("Play time: %d s", (int)world->time),
-            (Vector2){8.0, y},
+            (Vector2){x, y},
             0
         );
 
@@ -1412,20 +1427,18 @@ static void draw_world(World *world, Resources *resources) {
         draw_text(
             resources->stats_font,
             TextFormat("Keystrokes: %d", (int)world->n_keystrokes_typed),
-            (Vector2){8.0, y},
+            (Vector2){x, y},
             0
         );
 
         y += resources->stats_font.baseSize;
-        draw_text(
-            resources->stats_font, TextFormat("CPM: %d", cpm), (Vector2){8.0, y}, 0
-        );
+        draw_text(resources->stats_font, TextFormat("CPM: %d", cpm), (Vector2){x, y}, 0);
 
         y += resources->stats_font.baseSize;
         draw_text(
             resources->stats_font,
             TextFormat("Accuracy: %.2f", accuracy),
-            (Vector2){8.0, y},
+            (Vector2){x, y},
             0
         );
 
@@ -1433,10 +1446,9 @@ static void draw_world(World *world, Resources *resources) {
         draw_text(
             resources->stats_font,
             TextFormat("Difficulty: %s", world->difficulty_str),
-            (Vector2){8.0, y},
+            (Vector2){x, y},
             0
         );
-        // }
     }
 
     // draw commands
@@ -1456,14 +1468,14 @@ static void draw_world(World *world, Resources *resources) {
 
         if (command->show_separator) {
             DrawLineEx(
-                (Vector2){8.0, y - 4.0},
+                (Vector2){x, y - 4.0},
                 (Vector2){200.0, y - 4.0},
                 2,
                 ColorAlpha(WHITE, 0.3)
             );
         }
 
-        float text_x = 8.0;
+        float text_x = x;
         if (IsTextureReady(command->icon_texture)) {
             text_x += command->icon_texture.width + 2.0;
             BeginShaderMode(resources->sprite_material.shader);
@@ -1476,7 +1488,7 @@ static void draw_world(World *world, Resources *resources) {
             }
             DrawTextureEx(
                 command->icon_texture,
-                (Vector2){8.0, y - 2.0},
+                (Vector2){x - 2.0, y - 4.0},
                 0.0,
                 1.0,
                 ColorAlpha(GREEN, alpha)
@@ -1490,8 +1502,8 @@ static void draw_world(World *world, Resources *resources) {
 
         // draw command cooldown progress bar
         if (command->show_cooldown) {
-            float width = 190.0 * ratio;
-            Rectangle rec = {8.0, y + resources->command_font.baseSize, width, 5.0};
+            float width = w * ratio;
+            Rectangle rec = {x, y + resources->command_font.baseSize, width, 5.0};
             DrawRectangleRec(rec, color);
         }
     }
@@ -1657,6 +1669,11 @@ static float frand_01(void) {
 
 static float frand_centered(void) {
     return (frand_01() * 2.0) - 1.0;
+}
+
+static float frand_range(float left, float right) {
+    float range = right - left;
+    return left + frand_01() * range;
 }
 
 static AnimatedSprite get_animated_sprite(Texture2D texture, bool is_repeat) {
