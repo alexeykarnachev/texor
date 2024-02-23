@@ -349,6 +349,7 @@ static void update_camera(World *world);
 static void update_audio(World *world, Resources *resources);
 static void update_animated_sprite(AnimatedSprite *animated_sprite, float dt);
 static void draw_world(World *world, Resources *resources);
+static void draw_arena(Vector3 light_pos, float radius, Resources *resources);
 static void draw_text(
     Font font, const char *text, Vector2 position, const char *match_prompt
 );
@@ -1224,32 +1225,7 @@ static void draw_world(World *world, Resources *resources) {
     // scene
     if (world->state > STATE_MENU) {
         BeginMode3D(world->camera);
-
-        // draw arena boundary
-        float light_pos[2] = {
-            world->player.transform.translation.x, world->player.transform.translation.y};
-        SetShaderValue(
-            resources->ground_shader,
-            GetShaderLocation(resources->ground_shader, "u_light_pos"),
-            light_pos,
-            SHADER_UNIFORM_VEC2
-        );
-        SetShaderValue(
-            resources->ground_shader,
-            GetShaderLocation(resources->ground_shader, "u_radius"),
-            &world->spawn_radius,
-            SHADER_UNIFORM_FLOAT
-        );
-        BeginShaderMode(resources->ground_shader);
-        DrawCylinderEx(
-            (Vector3){0.0, 0.0, -1.0},
-            (Vector3){0.0, 0.0, -0.1},
-            world->spawn_radius,
-            world->spawn_radius,
-            64,
-            WHITE
-        );
-        EndShaderMode();
+        draw_arena(world->player.transform.translation, world->spawn_radius, resources);
 
         // draw player
         draw_animated_sprite(
@@ -1449,6 +1425,13 @@ static void draw_world(World *world, Resources *resources) {
             (Vector2){x, y},
             0
         );
+    } else {
+        BeginMode3D(world->camera);
+        float t = GetTime() * 0.3;
+        float r = world->spawn_radius * 0.6 * (sinf(t * 3.0) + 1.0) * 0.5;
+        Vector3 pos = {r * cosf(t), r * sinf(t), 0.0};
+        draw_arena(pos, world->spawn_radius, resources);
+        EndMode3D();
     }
 
     // draw commands
@@ -1525,6 +1508,27 @@ static void draw_world(World *world, Resources *resources) {
     draw_text(font, world->prompt, (Vector2){prompt_size.x, y}, 0);
 
     EndDrawing();
+}
+
+static void draw_arena(Vector3 light_pos, float radius, Resources *resources) {
+    float light_pos_f[2] = {light_pos.x, light_pos.y};
+    SetShaderValue(
+        resources->ground_shader,
+        GetShaderLocation(resources->ground_shader, "u_light_pos"),
+        light_pos_f,
+        SHADER_UNIFORM_VEC2
+    );
+    SetShaderValue(
+        resources->ground_shader,
+        GetShaderLocation(resources->ground_shader, "u_radius"),
+        &radius,
+        SHADER_UNIFORM_FLOAT
+    );
+    BeginShaderMode(resources->ground_shader);
+    DrawCylinderEx(
+        (Vector3){0.0, 0.0, -1.0}, (Vector3){0.0, 0.0, -0.1}, radius, radius, 64, WHITE
+    );
+    EndShaderMode();
 }
 
 static void draw_text(
