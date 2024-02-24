@@ -3,7 +3,6 @@
 #include "raymath.h"
 #include "rcamera.h"
 #include "rlgl.h"
-#include <asm-generic/errno.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <float.h>
@@ -12,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#if defined(PLATFORM_WEB)
+#include <emscripten/emscripten.h>
+#endif
 
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
@@ -331,6 +334,7 @@ typedef struct Resources {
 
 static Resources RESOURCES;
 static World WORLD;
+static void main_update(void);
 
 static void init_resources(Resources *resources);
 static void init_world(World *world, Resources *resources);
@@ -373,20 +377,28 @@ int main(void) {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "texor");
     InitAudioDevice();
-    SetTargetFPS(60);
 
     init_resources(&RESOURCES);
     init_world(&WORLD, &RESOURCES);
 
+#if defined(PLATFORM_WEB)
+    emscripten_set_main_loop(main_update, 0, 1);
+#else
+    SetTargetFPS(60);
     while (!WORLD.should_exit) {
-        update_world(&WORLD, &RESOURCES);
-        draw_world(&WORLD, &RESOURCES);
+        main_update();
     }
+#endif
+}
+
+static void main_update(void) {
+    update_world(&WORLD, &RESOURCES);
+    draw_world(&WORLD, &RESOURCES);
 }
 
 static void init_resources(Resources *resources) {
     // -------------------------------------------------------------------
-    // Audio
+    // audio
     resources->growling_music = LoadMusicStream("./resources/audio/growling.mp3");
     SetMusicVolume(resources->growling_music, 0.0);
     resources->water_dropping_music = LoadMusicStream(
@@ -626,8 +638,11 @@ static void init_spawn_position(World *world) {
 
 static void update_world(World *world, Resources *resources) {
     bool is_altf4_pressed = IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_F4);
+
+#if !defined(PLATFORM_WEB)
     world->should_exit = (WindowShouldClose() || is_altf4_pressed)
                          && !IsKeyPressed(KEY_ESCAPE);
+#endif
 
     world->dt = world->state == STATE_PLAYING ? GetFrameTime() : 0.0;
     world->time += world->dt;
@@ -1338,7 +1353,6 @@ static void draw_world(World *world, Resources *resources) {
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
 
-            BeginShaderMode(resources->sprite_material.shader);
             DrawTextureEx(
                 resources->health_icon_texture,
                 (Vector2){rec.x, rec.y - 10.0},
@@ -1346,7 +1360,6 @@ static void draw_world(World *world, Resources *resources) {
                 1.0,
                 WHITE
             );
-            EndShaderMode();
 
             // draw enemies spawn progress bar
             if (world->freeze_time >= EPSILON) {
@@ -1365,7 +1378,6 @@ static void draw_world(World *world, Resources *resources) {
             rec.width *= ratio;
             DrawRectangleRounded(rec, 0.5, 16, color);
 
-            BeginShaderMode(resources->sprite_material.shader);
             DrawTextureEx(
                 resources->enemy_icon_texture,
                 (Vector2){rec.x, rec.y - 10.0},
@@ -1373,7 +1385,6 @@ static void draw_world(World *world, Resources *resources) {
                 1.0,
                 WHITE
             );
-            EndShaderMode();
         }
 
         float accuracy = 1.0;
@@ -1461,7 +1472,6 @@ static void draw_world(World *world, Resources *resources) {
         float text_x = x;
         if (IsTextureReady(command->icon_texture)) {
             text_x += command->icon_texture.width + 2.0;
-            BeginShaderMode(resources->sprite_material.shader);
             float alpha = 1.0;
             if (ratio < 1.0 - EPSILON) {
                 float min_alpha = 0.2;
@@ -1476,7 +1486,6 @@ static void draw_world(World *world, Resources *resources) {
                 1.0,
                 ColorAlpha(GREEN, alpha)
             );
-            EndShaderMode();
         }
 
         draw_text(

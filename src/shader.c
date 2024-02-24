@@ -24,7 +24,12 @@ Shader load_shader(const char *vs_file_name, const char *fs_file_name) {
 static char *load_shader_src(const char *file_name) {
 
     const char *version;
+
+#if defined(PLATFORM_WEB)
+    version = "#version 300 es\n\nprecision highp float;";
+#else
     version = "#version 460 core";
+#endif
 
     char *common = LoadFileText("resources/shaders/common.glsl");
     char *text = LoadFileText(TextFormat("resources/shaders/%s", file_name));

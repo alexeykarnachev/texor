@@ -1,0 +1,23 @@
+CC = emcc
+INCLUDES = -I./deps/include
+CFLAGS = -Wall -Os
+LDFLAGS = -lpthread -lm -ldl
+
+SRCS = ./src/shader.c
+
+texor: %: ./bin/%.c $(SRCS)
+	$(CC) $(INCLUDES) $(CFLAGS) -o ./build/$@.html $^ $(LDFLAGS) \
+	-DPLATFORM_WEB \
+	-s MAXIMUM_MEMORY=1gb \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s STACK_SIZE=100MB \
+	-s TOTAL_MEMORY=256MB \
+	-s WASM=1 \
+	-s ASYNCIFY \
+	-s MAX_WEBGL_VERSION=2 \
+	-s MIN_WEBGL_VERSION=2 \
+	-s USE_GLFW=3 \
+	-s FORCE_FILESYSTEM=1 \
+	--preload-file resources \
+	--shell-file ./deps/src/raylib/src/minshell.html \
+	./deps/lib/web/libraylib.a

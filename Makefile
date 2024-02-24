@@ -1,7 +1,7 @@
 CC = gcc
 INCLUDES = -I./deps/include
 CFLAGS = -Wall
-LDFLAGS = -L./deps/lib -lraylib -lpthread -lm -ldl
+LDFLAGS = -L./deps/lib/desktop -lraylib -lpthread -lm -ldl
 
 SRCS = ./src/shader.c
 
