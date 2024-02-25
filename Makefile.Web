@@ -19,5 +19,5 @@ texor: %: ./bin/%.c $(SRCS)
 	-s USE_GLFW=3 \
 	-s FORCE_FILESYSTEM=1 \
 	--preload-file resources \
-	--shell-file ./deps/src/raylib/src/minshell.html \
+	--shell-file ./src/shell.html \
 	./deps/lib/web/libraylib.a
