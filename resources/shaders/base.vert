@@ -24,11 +24,6 @@ void main() {
     mat3 normalMatrix = transpose(inverse(mat3(matModel)));
     fragNormal = normalMatrix * vertexNormal;
 
-    for (int i = 0; i < n_directional_lights; ++i) {
-        DirectionalLight light = directional_lights[i];
-        directional_lights_pos[i] = light.vp * matModel * vec4(vertexPosition, 1.0);
-    }
-
     // Calculate final vertex position
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 }
