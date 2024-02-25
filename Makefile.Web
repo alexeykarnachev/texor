@@ -6,7 +6,7 @@ LDFLAGS = -lpthread -lm -ldl
 SRCS = ./src/shader.c
 
 texor: %: ./bin/%.c $(SRCS)
-	$(CC) $(INCLUDES) $(CFLAGS) -o ./build/$@.html $^ $(LDFLAGS) \
+	$(CC) $(INCLUDES) $(CFLAGS) -o ./build/web/index.html $^ $(LDFLAGS) \
 	-DPLATFORM_WEB \
 	-s MAXIMUM_MEMORY=1gb \
 	-s ALLOW_MEMORY_GROWTH=1 \

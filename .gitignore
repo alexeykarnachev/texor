@@ -1,7 +1,7 @@
 TODO
 deps
 aseprite
-blockbench
+blender
 build
 bin/*
 !bin/*.c

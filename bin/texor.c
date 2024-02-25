@@ -44,15 +44,14 @@
 // drop
 #define MAX_N_DROPS 4
 #define DROP_RADIUS 2.0
-#define DROP_PROBABILITY 1.0
-#define DROP_DURATION 30.0
+#define DROP_PROBABILITY 0.2
+#define DROP_DURATION 10.0
 #define DROP_HEAL_VALUE 30.0
 
 #define SPAWN_RADIUS 35.0
 #define ENEMY_RADIUS 2.0
 #define PLAYER_RADIUS 2.0
-// #define BASE_SPAWN_PERIOD 5.0
-#define BASE_SPAWN_PERIOD 0.1
+#define BASE_SPAWN_PERIOD 5.0
 #define BASE_ENEMY_SPEED_FACTOR 0.3
 #define MAX_ENEMY_SPEED_FACTOR 1.1
 #define BOSS_SPAWN_PERIOD 10  // in number of enemies
@@ -65,7 +64,7 @@
 #define DIFFICULTY_EASY 1
 #define DIFFICULTY_MEDIUM 3
 #define DIFFICULTY_HARD 6
-#define DIFFICULTY_MONKEYTYPE 10
+#define DIFFICULTY_MONKEYTYPE 12
 
 // puase
 #define PAUSE_COOLDOWN 5.0
@@ -294,6 +293,9 @@ typedef struct Resources {
     Music growling_music;
     Music water_dropping_music;
 
+    Model heal_model;
+    Model refresh_model;
+
     SoundsRoulette roar_sounds;
     SoundsRoulette player_step_sounds;
     SoundsRoulette enemy_attack_sounds;
@@ -421,6 +423,9 @@ static void init_resources(Resources *resources) {
 
     // -------------------------------------------------------------------
     // init models, meshes and materials
+    resources->heal_model = LoadModel("./resources/models/heal.glb");
+    resources->refresh_model = LoadModel("./resources/models/refresh.glb");
+
     resources->sprite_plane = GenMeshPlane(6.0, 6.0, 2, 2);
     resources->sprite_material = LoadMaterialDefault();
     resources->sprite_material.shader = load_shader(0, "sprite.frag");
@@ -1250,23 +1255,23 @@ static void draw_world(World *world, Resources *resources) {
         // draw drops
         for (int i = 0; i < world->n_drops; ++i) {
             Drop drop = world->drops[i];
-            Vector3 start = drop.position;
-            Vector3 end = start;
-            end.z += 2.0;
-            Color color;
+            float a = fmodf(world->time * 180.0, 360.0);
+
+            rlPushMatrix();
+            rlTranslatef(drop.position.x, drop.position.y, drop.position.z);
             if (drop.type == DROP_HEAL) {
-                color = MAGENTA;
+                rlRotatef(a, 0.0, 0.0, 1.0);
+                rlRotatef(80.0, 1.0, 0.0, 0.0);
+                DrawModel(
+                    resources->heal_model, Vector3Zero(), 1.0, (Color){170, 250, 170, 255}
+                );
             } else if (drop.type == DROP_REFRESH) {
-                color = GREEN;
+                rlTranslatef(0.0, 0.0, 1.0);
+                rlRotatef(a, 0.0, 0.0, 1.0);
+                rlRotatef(30.0, 1.0, 0.0, 0.0);
+                DrawModel(resources->refresh_model, Vector3Zero(), 1.0, WHITE);
             }
-
-            float r = 1.0 + (sinf(world->time * 4.0) + 1.0) * 0.5 * 0.25;
-
-            DrawCapsule(start, end, r, 16, 16, color);
-
-            start.z -= 1.0;
-            end.z += 1.0;
-            DrawCapsule(start, end, r * 1.5, 16, 16, ColorAlpha(color, 0.3));
+            rlPopMatrix();
         }
 
         // draw enemies
